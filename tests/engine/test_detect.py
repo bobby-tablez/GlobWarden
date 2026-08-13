@@ -161,17 +161,56 @@ class TestChunking:
         # the multi-call merge/renumber path without constructing a giant string.
         monkeypatch.setattr(detect, "_chunk_text", lambda text, **kw: ["chunk one text", "chunk two text"])
 
-        chunk1_response = detection_response_json([wildcard_finding_dict("f1")])
-        chunk2_response = detection_response_json([wildcard_finding_dict("f1")])  # id collides on purpose
-        provider = mock_provider_factory(responses=[chunk1_response, chunk2_response])
+        # Both chunks return an identically-shaped single finding on purpose:
+        # chunk calls run concurrently now (see module docstring), so which
+        # thread's call lands in provider.calls[0] vs [1] is not guaranteed --
+        # using the same response for both keeps the *findings* assertion
+        # below order-independent while still proving both calls happened.
+        chunk_response = detection_response_json([wildcard_finding_dict("f1")])
+        provider = mock_provider_factory(responses=[chunk_response, chunk_response])
 
         findings = find_obfuscation(_content("irrelevant, chunker is mocked"), provider)
 
         assert provider.call_count == 2
         assert [f.id for f in findings] == ["f1", "f2"]  # renumbered, no collision
-        # Both chunk calls should mention they're part of a multi-chunk document.
-        assert "chunk 1 of 2" in provider.calls[0]["user_prompt"]
-        assert "chunk 2 of 2" in provider.calls[1]["user_prompt"]
+
+        # Both chunk calls should mention they're part of a multi-chunk
+        # document -- checked as a set since concurrent completion order
+        # doesn't guarantee provider.calls[0] is chunk 1's call.
+        user_prompts = {call["user_prompt"] for call in provider.calls}
+        assert any("chunk 1 of 2" in p for p in user_prompts)
+        assert any("chunk 2 of 2" in p for p in user_prompts)
+
+    def test_chunk_findings_stay_in_source_order_regardless_of_completion_order(self, mock_provider_factory, monkeypatch):
+        # Three chunks; the responder introduces a small, deliberately
+        # inverted delay so chunk 3's call finishes before chunk 1's -- proves
+        # findings are ordered by chunk *position*, not by which thread
+        # happened to finish first.
+        import time
+
+        monkeypatch.setattr(detect, "_chunk_text", lambda text, **kw: ["chunk one text", "chunk two text", "chunk three text"])
+
+        def _responder(system_prompt: str, user_prompt: str) -> str:
+            finding = wildcard_finding_dict("x")  # id is discarded by renumbering either way
+            if "chunk 1 of 3" in user_prompt:
+                time.sleep(0.05)
+                finding["technique_name"] = "from-chunk-1"
+            elif "chunk 2 of 3" in user_prompt:
+                time.sleep(0.02)
+                finding["technique_name"] = "from-chunk-2"
+            else:
+                finding["technique_name"] = "from-chunk-3"
+            return detection_response_json([finding])
+
+        provider = mock_provider_factory(responder=_responder)
+        findings = find_obfuscation(_content("irrelevant, chunker is mocked"), provider)
+
+        # Chunk 3's call finishes first (no sleep) and chunk 1's finishes last
+        # (longest sleep) -- if results were ordered by completion instead of
+        # chunk position, this would read ["from-chunk-3", "from-chunk-2",
+        # "from-chunk-1"]. They must instead come back in source order.
+        assert [f.technique_name for f in findings] == ["from-chunk-1", "from-chunk-2", "from-chunk-3"]
+        assert [f.id for f in findings] == ["f1", "f2", "f3"]  # renumbered sequentially
 
     def test_images_attached_to_chunk_calls(self, mock_provider_factory):
         provider = mock_provider_factory(responses=[detection_response_json([])])

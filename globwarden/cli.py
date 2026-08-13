@@ -12,22 +12,22 @@ surface area from `typer` is small.
 
 Pipeline wiring: `scan()` calls, in order, `ingest.detect_source.load()`,
 `engine.detect.find_obfuscation()`, and `engine.generate.generate_rules()`
-exactly per `_briefs/00-ARCHITECTURE.md`. All three are real, committed
+exactly per `globwarden/models.py`. All three are real, committed
 modules as of this build. Each call site still imports its module lazily
 and raises a clear `CLIError` (not a raw traceback) on `ImportError`, so a
 genuinely missing/broken module fails with an actionable message rather
 than an `AttributeError` deep in the pipeline — but there is no longer a
 parallel stub implementation standing in for `engine.detect`/`.generate`:
-an earlier version of this file carried one (~600 lines) so this
-workstream could be built and demoed before Builder C's module landed; a
-post-integration review confirmed it had gone fully dead (its
-`except ImportError` branch could never fire once `globwarden/engine/`
-existed) and it was deleted rather than left as unreachable weight. The
-one exception is `_demo_content()` (`globwarden scan demo`), which is kept
-deliberately: a fixed, network-free, dependency-free source is worth
-having on hand for a live conference demo, independent of `ingest`. See
-`FakeProvider` below for the equivalent on the LLM side — it stays,
-because it's the live `--provider fake` demo/test path, not a stub.
+an earlier version of this file carried one (~600 lines) as a placeholder
+before those modules landed; a post-integration review confirmed it had
+gone fully dead (its `except ImportError` branch could never fire once
+`globwarden/engine/` existed) and it was deleted rather than left as
+unreachable weight. The one exception is `_demo_content()` (`globwarden
+scan demo`), which is kept deliberately: a fixed, network-free,
+dependency-free source is worth having on hand for a quick offline demo,
+independent of `ingest`. See `FakeProvider` below for the equivalent on
+the LLM side — it stays, because it's the live `--provider fake`
+demo/test path, not a stub.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ import json
 import os
 import re
 import time
-import uuid
 from enum import Enum
 from pathlib import Path
 
@@ -133,8 +132,10 @@ app = typer.Typer(
     help=(
         "Feed GlobWarden a threat-intel report — a URL, PDF, code file, image, or raw "
         "text — and it uses an LLM to identify command obfuscation techniques "
-        "(MITRE ATT&CK T1027.010) and generate ready-to-use detection content for them "
-        "in five formats at once: regex, KQL, SPL, YARA-L, and Sigma."
+        "(MITRE ATT&CK T1027.010) and generate the matching regex/detection logic for "
+        "them, formatted for up to five query languages at once: regex, KQL, SPL, "
+        "YARA-L, and Sigma. Output is the matching expression itself, not a complete "
+        "standalone rule — drop it into your own rule structure."
     ),
     add_completion=False,
     no_args_is_help=True,
@@ -158,7 +159,7 @@ def _root(
         help="Show GlobWarden's version and exit.",
     ),
 ) -> None:
-    """GlobWarden — obfuscation-technique-focused detection content, in five languages."""
+    """GlobWarden — command-obfuscation-technique-focused detection logic, in five query languages."""
 
 
 # ===========================================================================
@@ -254,33 +255,16 @@ _REGEX_TEMPLATES_BY_VALUE: dict[str, str] = {
 }
 
 
-def _sniff_rule_type(system_prompt: str) -> RuleType | None:
-    """Figure out which rule-generation call this is from its system prompt,
-    so FakeProvider can hand back a schema-correct canned response. Tries an
-    exact match against `engine.prompts.RULE_GENERATION_PROMPTS` first (most
-    reliable, when that module is present); falls back to keyword sniffing so
-    FakeProvider keeps working even if prompts.py's wording ever changes."""
-    try:
-        from globwarden.engine.prompts import RULE_GENERATION_PROMPTS
+_RULE_TYPE_SECTION_ORDER = [RuleType.REGEX, RuleType.KQL, RuleType.SPL, RuleType.YARA_L, RuleType.SIGMA]
 
-        for rule_type, prompt in RULE_GENERATION_PROMPTS.items():
-            if prompt.strip() == system_prompt.strip():
-                return rule_type
-    except ImportError:
-        pass
 
-    lowered = system_prompt.lower()
-    if "kusto query language" in lowered:
-        return RuleType.KQL
-    if "splunk search processing language" in lowered:
-        return RuleType.SPL
-    if "yara-l" in lowered:
-        return RuleType.YARA_L
-    if "sigma rule" in lowered:
-        return RuleType.SIGMA
-    if "regular expression" in lowered:
-        return RuleType.REGEX
-    return None
+def _sniff_requested_rule_types(system_prompt: str) -> list[RuleType]:
+    """Figure out which rule types a *combined* generation call is asking for,
+    from the `### <type>` section headers `prompts.build_generation_system_prompt`
+    always includes for each requested format -- so FakeProvider can hand back a
+    schema-correct canned response covering exactly the formats that were asked
+    for, same as a real provider would."""
+    return [rt for rt in _RULE_TYPE_SECTION_ORDER if f"### {rt.value}" in system_prompt]
 
 
 def _fake_findings_response(user_prompt: str) -> str:
@@ -299,65 +283,75 @@ def _fake_findings_response(user_prompt: str) -> str:
     return json.dumps({"findings": selected})
 
 
-def _fake_rule_response(rule_type: RuleType, user_prompt: str) -> str:
-    """Schema-correct canned response for one rule-generation call, keyed off
-    the `Category: ...` line that `prompts.rule_generation_user_prompt` always
-    embeds in the user prompt."""
+def _fake_pattern_and_explanation(user_prompt: str) -> tuple[str, str]:
+    """Pick a canned regex pattern keyed off the `Category: ...` line that
+    `prompts.rule_generation_user_prompt` always embeds in the user prompt --
+    shared by both the combined-call path and the narrow regex-retry path."""
     match = re.search(r"Category:\s*(\S+)", user_prompt)
     category = match.group(1) if match else "other"
     pattern = _REGEX_TEMPLATES_BY_VALUE.get(category, _REGEX_TEMPLATES_BY_VALUE["other"])
     explanation = "Flags the characteristic tokens of this technique in command-line/script-block telemetry."
+    return pattern, explanation
 
-    if rule_type == RuleType.REGEX:
-        payload = {"pattern": pattern, "explanation": explanation}
-    elif rule_type == RuleType.KQL:
-        query = (
-            "DeviceProcessEvents\n"
-            f'| where InitiatingProcessCommandLine matches regex @"{pattern}"\n'
-            "| project TimeGenerated, DeviceName, AccountName, InitiatingProcessCommandLine"
-        )
-        payload = {"query": query, "explanation": explanation}
-    elif rule_type == RuleType.SPL:
-        query = (
-            'index=* sourcetype="WinEventLog:Microsoft-Windows-PowerShell/Operational"\n'
-            f'| regex CommandLine="{pattern}"\n'
-            "| table _time host user CommandLine"
-        )
-        payload = {"query": query, "explanation": explanation}
-    elif rule_type == RuleType.YARA_L:
-        rule = (
-            "rule globwarden_generated {\n"
-            "  meta:\n"
-            '    description = "GlobWarden FakeProvider demo rule"\n'
-            '    author = "GlobWarden"\n'
-            '    severity = "Medium"\n'
-            "  events:\n"
-            f"    $e.target.process.command_line = /{pattern}/ nocase\n"
-            "  condition:\n"
-            "    $e\n"
-            "}"
-        )
-        payload = {"rule": rule, "explanation": explanation}
-    else:  # SIGMA
-        doc = {
-            "title": "GlobWarden FakeProvider demo rule",
-            "id": str(uuid.uuid4()),
-            "status": "experimental",
-            "description": explanation,
-            "logsource": {"category": "process_creation", "product": "windows"},
-            "detection": {"selection": {"CommandLine|re": pattern}, "condition": "selection"},
-            "level": "medium",
-            "tags": ["attack.defense-evasion", "attack.t1027.010", "attack.t1027"],
-        }
-        payload = {"rule_yaml": yaml.safe_dump(doc, sort_keys=False), "explanation": explanation}
+
+def _fake_regex_retry_response(user_prompt: str) -> str:
+    """Schema-correct canned response for the narrow, single-purpose regex
+    retry call (matches `REGEX_SYSTEM_PROMPT`'s `{"pattern", "explanation"}`
+    shape). Deliberately returns the same (still-broken, for encoded_cradle)
+    pattern as the combined call would have -- see `_REGEX_TEMPLATES_BY_VALUE`."""
+    pattern, explanation = _fake_pattern_and_explanation(user_prompt)
+    return json.dumps({"pattern": pattern, "explanation": explanation})
+
+
+def _fake_combined_rule_response(rule_types: list[RuleType], user_prompt: str) -> str:
+    """Schema-correct canned response for a combined generation call covering
+    every format in `rule_types` -- one section per requested type, matching
+    `prompts.build_generation_system_prompt`'s schema (minimal matching
+    expression per format, not a full standalone rule)."""
+    pattern, explanation = _fake_pattern_and_explanation(user_prompt)
+
+    payload: dict[str, dict] = {}
+    for rule_type in rule_types:
+        if rule_type is RuleType.REGEX:
+            payload["regex"] = {"pattern": pattern, "explanation": explanation}
+        elif rule_type is RuleType.KQL:
+            line = f'ProcessCommandLine matches regex @"{pattern}"'
+            payload["kql"] = {"line": line, "explanation": explanation}
+        elif rule_type is RuleType.SPL:
+            line = f'regex ScriptBlockText="{pattern}"'
+            payload["spl"] = {"line": line, "explanation": explanation}
+        elif rule_type is RuleType.YARA_L:
+            line = f"$e.target.process.command_line = /{pattern}/ nocase"
+            payload["yara_l"] = {"line": line, "explanation": explanation}
+        elif rule_type is RuleType.SIGMA:
+            detection = {"selection": {"CommandLine|re": pattern}, "condition": "selection"}
+            payload["sigma"] = {
+                "detection_yaml": yaml.safe_dump(detection, sort_keys=False),
+                "explanation": explanation,
+            }
 
     return json.dumps(payload)
 
 
 def _fake_response_for(system_prompt: str, user_prompt: str) -> str:
-    rule_type = _sniff_rule_type(system_prompt)
-    if rule_type is not None:
-        return _fake_rule_response(rule_type, user_prompt)
+    try:
+        from globwarden.engine.prompts import DETECTION_SYSTEM_PROMPT, REGEX_SYSTEM_PROMPT
+    except ImportError:
+        return _fake_findings_response(user_prompt)
+
+    stripped = system_prompt.strip()
+    if stripped == DETECTION_SYSTEM_PROMPT.strip():
+        return _fake_findings_response(user_prompt)
+    if stripped == REGEX_SYSTEM_PROMPT.strip():
+        return _fake_regex_retry_response(user_prompt)
+
+    rule_types = _sniff_requested_rule_types(system_prompt)
+    if rule_types:
+        return _fake_combined_rule_response(rule_types, user_prompt)
+
+    # Unrecognized prompt shape (e.g. prompts.py's wording changed without a
+    # matching update here) -- fall back to a findings response rather than
+    # crashing FakeProvider outright.
     return _fake_findings_response(user_prompt)
 
 
@@ -854,13 +848,15 @@ def scan(
             findings = _find_obfuscation(content, provider_inst)
 
             if not dry_run:
-                # engine.generate calls the provider once per (finding, rule_type)
-                # pair, sequentially -- against a real cloud LLM this can run well
-                # past the few seconds FakeProvider takes, with the spinner's text
+                # engine.generate calls the provider once per finding (covering
+                # every requested rule type in that one combined call, plus an
+                # occasional narrow regex-only retry), running independent
+                # findings' calls concurrently -- against a real cloud LLM this
+                # can still take a few seconds, with the spinner's text
                 # otherwise static the whole time. Surfacing the expected call
                 # count at least sets an honest expectation instead of a silent
                 # "[3/3] generating detection rules…" that looks stalled on stage.
-                call_estimate = len(findings) * len(rule_types)
+                call_estimate = len(findings)
                 calls_note = f" (~{call_estimate} LLM call{'s' if call_estimate != 1 else ''})" if call_estimate else ""
                 stage.stage(f"[3/3] generating detection rules{calls_note}…")
                 generated_rules = _generate_rules(findings, rule_types, provider_inst)

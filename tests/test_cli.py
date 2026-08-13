@@ -468,27 +468,54 @@ def test_fake_provider_detection_response_matches_expected_schema():
     assert len(payload["findings"]) >= 1
 
 
-def test_fake_provider_rule_generation_response_shapes():
+def test_fake_provider_combined_rule_generation_response_shape():
+    """A real generation call is now combined -- one call covers every
+    requested rule type -- so FakeProvider sniffs the requested types from the
+    `### <type>` section headers `prompts.build_generation_system_prompt`
+    always includes, and hands back one section per requested type using that
+    format's real content key (`pattern`/`line`/`detection_yaml`, per
+    `prompts.RULE_CONTENT_KEY`)."""
+    from globwarden.engine.prompts import RULE_CONTENT_KEY, build_generation_system_prompt
+
+    all_types = [RuleType.REGEX, RuleType.KQL, RuleType.SPL, RuleType.YARA_L, RuleType.SIGMA]
     provider = cli_module.FakeProvider()
-    cases = {
-        RuleType.REGEX: "regular expression",
-        RuleType.KQL: "Kusto Query Language",
-        RuleType.SPL: "Splunk Search Processing Language",
-        RuleType.YARA_L: "YARA-L 2.0",
-        RuleType.SIGMA: "Sigma rules",
-    }
-    expected_key = {
-        RuleType.REGEX: "pattern",
-        RuleType.KQL: "query",
-        RuleType.SPL: "query",
-        RuleType.YARA_L: "rule",
-        RuleType.SIGMA: "rule_yaml",
-    }
-    for rule_type, sniff_hint in cases.items():
-        response = provider.complete(f"You are writing {sniff_hint} content.", "Category: wildcard_resolution")
-        payload = json.loads(response.text)
-        assert expected_key[rule_type] in payload
-        assert "explanation" in payload
+    system_prompt = build_generation_system_prompt(all_types)
+
+    response = provider.complete(system_prompt, "Category: wildcard_resolution")
+    payload = json.loads(response.text)
+
+    assert set(payload.keys()) == {rt.value for rt in all_types}
+    for rule_type in all_types:
+        section = payload[rule_type.value]
+        assert RULE_CONTENT_KEY[rule_type] in section
+        assert section[RULE_CONTENT_KEY[rule_type]]  # non-empty
+        assert "explanation" in section
+
+
+def test_fake_provider_combined_response_only_covers_requested_types():
+    from globwarden.engine.prompts import build_generation_system_prompt
+
+    provider = cli_module.FakeProvider()
+    system_prompt = build_generation_system_prompt([RuleType.REGEX, RuleType.SIGMA])
+
+    response = provider.complete(system_prompt, "Category: encoded_cradle")
+    payload = json.loads(response.text)
+
+    assert set(payload.keys()) == {"regex", "sigma"}
+
+
+def test_fake_provider_regex_retry_response_shape():
+    """The regex-retry call uses the narrow, single-purpose
+    `REGEX_SYSTEM_PROMPT` (not the combined one) and gets back the original,
+    single-format `{"pattern", "explanation"}` shape."""
+    from globwarden.engine.prompts import REGEX_SYSTEM_PROMPT
+
+    provider = cli_module.FakeProvider()
+    response = provider.complete(REGEX_SYSTEM_PROMPT, "Category: wildcard_resolution")
+    payload = json.loads(response.text)
+
+    assert "pattern" in payload
+    assert "explanation" in payload
 
 
 # ---------------------------------------------------------------------------

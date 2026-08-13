@@ -9,10 +9,15 @@ Chunking strategy (see `_chunk_text` docstring for the full tradeoff discussion)
 long text content is split into overlapping character-based chunks so a single
 call never blows past typical context limits; each chunk is sent as an
 independent detection call and the resulting findings are merged and re-numbered.
+Chunks are independent of one another, so for multi-chunk content their calls run
+concurrently (bounded by `DEFAULT_MAX_CONCURRENCY`) rather than one at a time --
+the common case is a single chunk (most reports fit in one), where this has no
+effect; it matters for long PDFs/reports that split into several chunks.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 
 from globwarden.engine._parsing import JSONExtractionError, extract_json_object
@@ -21,6 +26,12 @@ from globwarden.llm.base import LLMProvider
 from globwarden.models import IngestedContent, ObfuscationCategory, ObfuscationFinding
 
 logger = logging.getLogger(__name__)
+
+# Bounded thread-pool size for concurrent per-chunk detection calls. See
+# engine.generate.DEFAULT_MAX_CONCURRENCY for the same rationale (kept as a
+# separate constant rather than shared, since detection and generation calls
+# never run against the same pool at the same time).
+DEFAULT_MAX_CONCURRENCY = 5
 
 # Character budget per chunk. This is a deliberately conservative, model-agnostic
 # proxy for "tokens" (roughly 4 chars/token for English/code text, so ~12000 chars
@@ -195,17 +206,26 @@ def _detect_in_chunk(
     return findings_raw
 
 
-def find_obfuscation(content: IngestedContent, provider: LLMProvider) -> list[ObfuscationFinding]:
+def find_obfuscation(
+    content: IngestedContent,
+    provider: LLMProvider,
+    *,
+    max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
+) -> list[ObfuscationFinding]:
     """Extract T1027.010-style obfuscation findings from ingested content.
 
     Long `content.text` is chunked (see `_chunk_text`) so each provider call stays
     within a conservative character budget; findings from all chunks are merged
-    and re-numbered sequentially ("f1", "f2", ...) in the order encountered.
+    and re-numbered sequentially ("f1", "f2", ...) in the order the chunks appear
+    in the source (not the order their calls happen to complete in).
 
     Images (if present on `content` and the provider supports vision) are attached
     to every chunk's call — simplest correct behavior, though it does mean
     multi-chunk text content re-sends the same image bytes on each call. For the
     common case (short-to-medium report content, one chunk) this has no cost.
+
+    Chunk calls run concurrently (bounded by `max_concurrency`) when there's more
+    than one — see module docstring.
 
     Raises `DetectionError` if a chunk's response cannot be recovered as usable
     JSON at all. Individual malformed *findings* within an otherwise-parseable
@@ -214,22 +234,44 @@ def find_obfuscation(content: IngestedContent, provider: LLMProvider) -> list[Ob
     chunks = _chunk_text(content.text)
     multi_chunk = len(chunks) > 1
 
-    all_raw_findings: list[dict] = []
-    for i, chunk in enumerate(chunks):
+    def _run_chunk(i: int, chunk: str) -> list[dict]:
         chunk_note = (
             f"\nNote: this is chunk {i + 1} of {len(chunks)} from a longer document. "
             "Only report techniques actually present in THIS chunk's text.\n"
             if multi_chunk
             else ""
         )
-        raw_findings = _detect_in_chunk(
-            content,
-            chunk,
-            provider,
-            chunk_note,
-            include_images=True,
-        )
-        all_raw_findings.extend(raw_findings)
+        return _detect_in_chunk(content, chunk, provider, chunk_note, include_images=True)
+
+    all_raw_findings: list[dict] = []
+    if not multi_chunk:
+        all_raw_findings = _run_chunk(0, chunks[0])
+    else:
+        max_workers = max(1, min(max_concurrency, len(chunks)))
+        results_by_index: list[list[dict] | None] = [None] * len(chunks)
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        first_exception: DetectionError | None = None
+        try:
+            future_to_index = {executor.submit(_run_chunk, i, chunk): i for i, chunk in enumerate(chunks)}
+            for future in concurrent.futures.as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results_by_index[index] = future.result()
+                except DetectionError as exc:
+                    # Fail fast: stop waiting on further chunks once one is
+                    # unrecoverable, rather than burning the rest of the
+                    # API budget on chunks whose result will be discarded.
+                    first_exception = exc
+                    break
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+        if first_exception is not None:
+            raise first_exception
+
+        for chunk_findings in results_by_index:
+            assert chunk_findings is not None  # every future completed without raising, or we raised above
+            all_raw_findings.extend(chunk_findings)
 
     findings: list[ObfuscationFinding] = []
     for i, raw in enumerate(all_raw_findings, start=1):

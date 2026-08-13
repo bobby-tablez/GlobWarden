@@ -1,8 +1,8 @@
 """End-to-end test: detect.find_obfuscation -> generate.generate_rules, run
 against a synthetic report excerpt through a MockLLMProvider, matching the
 `ingest -> detect -> generate -> render` integration contract in
-`_briefs/00-ARCHITECTURE.md` (minus the ingest/render steps, which are other
-builders' modules).
+`globwarden/models.py` (minus the ingest/render steps, which are other
+modules).
 """
 
 from __future__ import annotations
@@ -12,18 +12,14 @@ from globwarden.engine.generate import generate_rules
 from globwarden.models import IngestedContent, ObfuscationCategory, RuleType, SourceType
 
 from .conftest import (
-    VALID_KQL_QUERY,
+    VALID_KQL_LINE,
     VALID_REGEX_PATTERN,
-    VALID_SIGMA_RULE,
-    VALID_SPL_QUERY,
-    VALID_YARA_L_RULE,
+    VALID_SIGMA_DETECTION_BLOCK,
+    VALID_SPL_LINE,
+    VALID_YARA_L_LINE,
+    combined_response_json,
     detection_response_json,
-    kql_response_json,
-    regex_response_json,
-    sigma_response_json,
-    spl_response_json,
     wildcard_finding_dict,
-    yara_l_response_json,
 )
 
 # A short, synthetic threat-intel-style report excerpt describing the wildcard
@@ -54,17 +50,20 @@ def test_full_pipeline_produces_sensible_findings_and_rules(mock_provider_factor
     # Detection call returns one realistic wildcard-resolution finding.
     detection_response = detection_response_json([wildcard_finding_dict("f1")])
 
-    # Generation calls: one finding x five rule types, in the order generate_rules
-    # iterates (rule_types order, for each finding).
-    generation_responses = [
-        regex_response_json(VALID_REGEX_PATTERN),
-        kql_response_json(VALID_KQL_QUERY),
-        spl_response_json(VALID_SPL_QUERY),
-        yara_l_response_json(VALID_YARA_L_RULE),
-        sigma_response_json(VALID_SIGMA_RULE),
-    ]
+    # Generation now makes one combined call per finding, covering every
+    # requested rule type in a single response -- not one call per
+    # (finding, rule_type) pair.
+    generation_response = combined_response_json(
+        {
+            RuleType.REGEX: (VALID_REGEX_PATTERN, "explains it"),
+            RuleType.KQL: (VALID_KQL_LINE, "explains it"),
+            RuleType.SPL: (VALID_SPL_LINE, "explains it"),
+            RuleType.YARA_L: (VALID_YARA_L_LINE, "explains it"),
+            RuleType.SIGMA: (VALID_SIGMA_DETECTION_BLOCK, "explains it"),
+        }
+    )
 
-    provider = mock_provider_factory(responses=[detection_response, *generation_responses])
+    provider = mock_provider_factory(responses=[detection_response, generation_response])
 
     content = IngestedContent(
         source="synthetic-incident-notes.txt",
@@ -85,6 +84,8 @@ def test_full_pipeline_produces_sensible_findings_and_rules(mock_provider_factor
     all_rule_types = [RuleType.REGEX, RuleType.KQL, RuleType.SPL, RuleType.YARA_L, RuleType.SIGMA]
     rules = generate_rules(findings, all_rule_types, provider)
 
+    # One finding, one combined call covering every format -- not five.
+    assert provider.call_count == 2  # the detection call, plus this one combined generation call
     assert len(rules) == 5
     assert {r.rule_type for r in rules} == set(all_rule_types)
     assert all(r.finding_id == "f1" for r in rules)
@@ -101,8 +102,11 @@ def test_full_pipeline_produces_sensible_findings_and_rules(mock_provider_factor
     sigma_rule = next(r for r in rules if r.rule_type == RuleType.SIGMA)
     import yaml
 
+    # GlobWarden asks for just the detection block now, not a full rule --
+    # `condition` lives at the top level, with no title/logsource wrapper.
     parsed_sigma = yaml.safe_load(sigma_rule.content)
-    assert "detection" in parsed_sigma and "condition" in parsed_sigma["detection"]
+    assert "condition" in parsed_sigma
+    assert "title" not in parsed_sigma and "logsource" not in parsed_sigma
 
 
 def test_pipeline_with_no_findings_generates_no_rules(mock_provider_factory):

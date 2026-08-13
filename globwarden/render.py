@@ -58,13 +58,11 @@ __all__ = [
 # whole tool can be re-themed from one place if that's ever wanted.
 #
 # Matches the amber/cyan palette used everywhere else in this project's brand
-# (assets/banner.svg, docs/index.html, and the companion conference deck) —
-# an earlier version of this file used a phosphor-green/cyan pair instead,
-# which meant the presenter's actual live terminal wouldn't match the
-# amber-branded title slide/website shown seconds earlier on stage. Cyan
-# stays reserved for MITRE ATT&CK/framework-specific tags specifically
-# (matching the same semantic convention used in docs/index.html), not as a
-# general second accent.
+# (assets/banner.svg, docs/index.html) — an earlier version of this file used
+# a phosphor-green/cyan pair instead, which didn't match. Cyan stays reserved
+# for MITRE ATT&CK/framework-specific tags specifically (matching the same
+# semantic convention used in docs/index.html), not as a general second
+# accent.
 # --------------------------------------------------------------------------
 BRAND = "#f2a53c"  # amber
 BRAND_DIM = "#7d551f"
@@ -122,7 +120,7 @@ def _rule_type_display(rule_type) -> str:
 # --------------------------------------------------------------------------
 
 
-def banner(console: Console, *, version: str = "0.1.0") -> None:
+def banner(console: Console, *, version: str = "0.2.0") -> None:
     """Print the startup banner. Deliberately not full figlet ASCII art —
     a tight, well-kerned wordmark in a heavy-bordered panel reads sharper
     on a projector than a hand-drawn font, and it can't come out lopsided
@@ -135,7 +133,7 @@ def banner(console: Console, *, version: str = "0.1.0") -> None:
 
     title_line = Text.assemble(mark, "  ", wordmark)
     tagline = Text(
-        "one obfuscated pattern in — five ready-to-use detection rules out",
+        "one obfuscated pattern in — regex-based detection logic out, in five query languages",
         style=f"italic {MUTED}",
     )
     meta = Text.assemble(

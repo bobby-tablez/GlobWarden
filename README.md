@@ -2,7 +2,7 @@
 
 ![GlobWarden](assets/banner.svg)
 
-**One obfuscated pattern in, five ready-to-use detection rules out.**
+**One obfuscated pattern in, regex-based detection logic out — in five query languages.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
@@ -19,173 +19,135 @@ file, or a screenshot — and uses an LLM (cloud or fully local) to identify **c
 obfuscation techniques** described or shown in it: the T1027.010 family of tricks
 (character masking, wildcard/glob-based alias resolution, string concatenation,
 environment-variable indirection, encoded download cradles, and similar
-pattern-matching-evasion techniques). For each technique it finds, it generates
-ready-to-use detection content in five formats — **regex, KQL, SPL, YARA-L, and
-Sigma** — in one pass, rendered in a colorized terminal UI.
+pattern-matching-evasion techniques). For each technique it finds, it generates the
+matching regex — formatted for up to five query languages at once — **regex, KQL,
+SPL, YARA-L, and Sigma** — in one pass, rendered in a colorized terminal UI. Output
+is the matching expression itself (a bare regex line for KQL/SPL/YARA-L, just the
+`detection:` block for Sigma), not a complete standalone rule — GlobWarden expects
+you to drop it into your own rule structure, not ship it as one.
 
-It exists because of a gap. STEEP#MAVERICK's wildcard `Get-Alias`/`Get-Command` →
-`Invoke-Expression` pattern had no name in MITRE ATT&CK until T1027.010 was written —
-and that gap only closed because someone sat down, read the campaign write-up by
-hand, and translated "here's the pattern" into "here's how you'd actually detect
-it." GlobWarden automates that translation as a *starting point*. It's a
-detection-engineering assistant that requires analyst review, not a certified
-translation engine that replaces one — say that plainly, because it's true and
-because overselling accuracy on a security tool is how trust gets burned.
-
-(A companion tool from the same talk, `t1027010_hunter.py`, does the reverse
-direction: static analysis of PowerShell scripts you already have in hand.
-GlobWarden reads prose *about* a technique and produces new detection content from
-it — a separate, standalone project, mentioned here for context only.)
+It exists because of a gap. Wildcard-based `Get-Alias`/`Get-Command` →
+`Invoke-Expression` resolution used to invoke a cmdlet indirectly is exactly the
+kind of pattern that had no name in MITRE ATT&CK until T1027.010 was written — and
+that gap only closes when someone sits down, reads a report by hand, and translates
+"here's the pattern" into "here's how you'd actually detect it." GlobWarden
+automates that translation as a *starting point*. It's a detection-engineering
+assistant that requires analyst review, not a certified translation engine that
+replaces one — say that plainly, because it's true and because overselling
+accuracy on a security tool is how trust gets burned.
 
 ## See it run
 
 ```text
 $ globwarden scan demo --provider fake --rules regex,sigma,kql
 
-┏━ GlobWarden ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃                                                                                            ┃
-┃    ◈  G L O B W A R D E N                                                                  ┃
-┃                                                                                            ┃
-┃    one obfuscated pattern in — five ready-to-use detection rules out                       ┃
-┃                                                                                            ┃
-┃    T1027.010 command obfuscation  ·  v0.1.0                                                ┃
-┃                                                                                            ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ feed it a report, get detection content ━┛
+┏━ GlobWarden ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃                                                                                              ┃
+┃    ◈  G L O B W A R D E N                                                                    ┃
+┃                                                                                              ┃
+┃    one obfuscated pattern in — regex-based detection logic out, in five query languages      ┃
+┃                                                                                              ┃
+┃    T1027.010 command obfuscation  ·  v0.1.0                                                  ┃
+┃                                                                                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ feed it a report, get detection content ━┛
     target  demo             
   provider  fake (fake-mini) 
 rule types  regex, sigma, kql
-──────────────────────────────────────────────────────────────────────────────────────────────
-⠋ pipeline complete. ━          ━━━━━━━━━━    0:00:00
+────────────────────────────────────────────────────────────────────────────────────────────────
+⠋ pipeline complete. ━━━━━━━━━━━━━━━━━━━━━━━━ 0:00:00
 
-──────────────────────────────────── detected techniques ─────────────────────────────────────
+───────────────────────────────────── detected techniques ──────────────────────────────────────
 
-╭─ [1/4] Wildcard Get-Alias Resolution to Invoke-Expression ─────────────────────────────────╮
-│                                                                                            │
-│      category Wildcard / Glob Resolution                                                   │
-│        att&ck T1027.010 (parent: T1027)                                                    │
-│    confidence ▰▰▰▰▰▰▰▰▰▱  91%                                                              │
-│                                                                                            │
-│               Command-line alias lookups are performed with a truncated wildcard pattern   │
-│               (e.g. `Get-Alias i*x`) instead of the literal alias name, resolving to iex   │
-│               at runtime and defeating substring-match detections written against the      │
-│               literal string.                                                              │
-│                                                                                            │
-│       example (Get-Alias i*x)[0].Definition | % { & $_ $cmd }                              │
-│                                                                                            │
-╰────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ [1/4] Wildcard Get-Alias Resolution to Invoke-Expression ───────────────────────────────────╮
+│                                                                                              │
+│      category Wildcard / Glob Resolution                                                     │
+│        att&ck T1027.010 (parent: T1027)                                                      │
+│    confidence ▰▰▰▰▰▰▰▰▰▱  91%                                                                │
+│                                                                                              │
+│               Command-line alias lookups are performed with a truncated wildcard pattern     │
+│               (e.g. `Get-Alias i*x`) instead of the literal alias name, resolving to iex at  │
+│               runtime and defeating substring-match detections written against the literal   │
+│               string.                                                                        │
+│                                                                                              │
+│       example (Get-Alias i*x)[0].Definition | % { & $_ $cmd }                                │
+│                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────╯
 
-    ┌─ ✓ REGEX ──────────────────────────────────────────────────────────────────────────────┐
-    │                                                                                        │
-    │  (?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b                                    │
-    │                                                                                        │
-    │  Flags the characteristic tokens of this technique in command-line/script-block        │
-    │  telemetry.                                                                            │
-    │                                                                                        │
-    └────────────────────────────────────────────────────────────────────────────────────────┘
-    ┌─ ✓ SIGMA ──────────────────────────────────────────────────────────────────────────────┐
-    │                                                                                        │
-    │  title: GlobWarden FakeProvider demo rule                                              │
-    │  id: 9dd85130-01e3-44e2-a99b-963f19d7e3d2                                              │
-    │  status: experimental                                                                  │
-    │  description: Flags the characteristic tokens of this technique in                     │
-    │  command-line/script-block                                                             │
-    │    telemetry.                                                                          │
-    │  logsource:                                                                            │
-    │    category: process_creation                                                          │
-    │    product: windows                                                                    │
-    │  detection:                                                                            │
-    │    selection:                                                                          │
-    │      CommandLine|re: (?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b                │
-    │    condition: selection                                                                │
-    │  level: medium                                                                         │
-    │  tags:                                                                                 │
-    │  - attack.defense-evasion                                                              │
-    │  - attack.t1027.010                                                                    │
-    │  - attack.t1027                                                                        │
-    │                                                                                        │
-    │                                                                                        │
-    │  Flags the characteristic tokens of this technique in command-line/script-block        │
-    │  telemetry.                                                                            │
-    │                                                                                        │
-    └────────────────────────────────────────────────────────────────────────────────────────┘
-    ┌─ ✓ KQL  (Microsoft Sentinel) ──────────────────────────────────────────────────────────┐
-    │                                                                                        │
-    │  DeviceProcessEvents                                                                   │
-    │  | where InitiatingProcessCommandLine matches regex                                    │
-    │  @"(?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b"                                 │
-    │  | project TimeGenerated, DeviceName, AccountName, InitiatingProcessCommandLine        │
-    │                                                                                        │
-    │  Flags the characteristic tokens of this technique in command-line/script-block        │
-    │  telemetry.                                                                            │
-    │                                                                                        │
-    └────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ✓ REGEX ────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                          │
+    │  (?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b                                      │
+    │                                                                                          │
+    │  Flags the characteristic tokens of this technique in command-line/script-block          │
+    │  telemetry.                                                                              │
+    │                                                                                          │
+    └──────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ✓ SIGMA ────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                          │
+    │  selection:                                                                              │
+    │    CommandLine|re: (?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b                    │
+    │  condition: selection                                                                    │
+    │                                                                                          │
+    │  Flags the characteristic tokens of this technique in command-line/script-block          │
+    │  telemetry.                                                                              │
+    │                                                                                          │
+    └──────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ✓ KQL  (Microsoft Sentinel) ────────────────────────────────────────────────────────────┐
+    │                                                                                          │
+    │  ProcessCommandLine matches regex @"(?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b"  │
+    │                                                                                          │
+    │  Flags the characteristic tokens of this technique in command-line/script-block          │
+    │  telemetry.                                                                              │
+    │                                                                                          │
+    └──────────────────────────────────────────────────────────────────────────────────────────┘
 
     … 2 more findings, same layout (backtick-split masking, env-var-assembled cmdlet) …
 
-╭─ [4/4] Base64-Encoded Download Cradle ─────────────────────────────────────────────────────╮
-│                                                                                            │
-│      category Encoded Download Cradle                                                      │
-│        att&ck T1027.010 (parent: T1027), T1140 (Deobfuscate/Decode)                        │
-│    confidence ▰▰▰▰▰▰▰▰▰▱  93%                                                              │
-│                                                                                            │
-│               A -EncodedCommand/-enc invocation carries a base64-encoded UTF-16LE payload  │
-│               that downloads and executes a secondary stage, hiding the actual             │
-│               download-and-execute logic from plain-text command-line scans.               │
-│                                                                                            │
-│       example powershell -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3...                       │
-│                                                                                            │
-╰────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ [4/4] Base64-Encoded Download Cradle ───────────────────────────────────────────────────────╮
+│                                                                                              │
+│      category Encoded Download Cradle                                                        │
+│        att&ck T1027.010 (parent: T1027), T1140 (Deobfuscate/Decode)                          │
+│    confidence ▰▰▰▰▰▰▰▰▰▱  93%                                                                │
+│                                                                                              │
+│               A -EncodedCommand/-enc invocation carries a base64-encoded UTF-16LE payload    │
+│               that downloads and executes a secondary stage, hiding the actual               │
+│               download-and-execute logic from plain-text command-line scans.                 │
+│                                                                                              │
+│       example powershell -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3...                         │
+│                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────╯
 
-    ┌─ ✗ REGEX ──────────────────────────────────────────────────────────────────────────────┐
-    │                                                                                        │
-    │  ⚠ VALIDATION FAILED — Failed to compile after one retry: Pattern did not compile      │
-    │  with Python's re module: missing ), unterminated subpattern at position 44            │
-    │                                                                                        │
-    │  (?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}(                                         │
-    │                                                                                        │
-    │  Flags the characteristic tokens of this technique in command-line/script-block        │
-    │  telemetry.                                                                            │
-    │                                                                                        │
-    └────────────────────────────────────────────────────────────────────────────────────────┘
-    ┌─ ✓ SIGMA ──────────────────────────────────────────────────────────────────────────────┐
-    │                                                                                        │
-    │  title: GlobWarden FakeProvider demo rule                                              │
-    │  id: 838f05f9-d347-425b-9cb2-9f5496ccc6ce                                              │
-    │  status: experimental                                                                  │
-    │  description: Flags the characteristic tokens of this technique in                     │
-    │  command-line/script-block                                                             │
-    │    telemetry.                                                                          │
-    │  logsource:                                                                            │
-    │    category: process_creation                                                          │
-    │    product: windows                                                                    │
-    │  detection:                                                                            │
-    │    selection:                                                                          │
-    │      CommandLine|re: (?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}(                     │
-    │    condition: selection                                                                │
-    │  level: medium                                                                         │
-    │  tags:                                                                                 │
-    │  - attack.defense-evasion                                                              │
-    │  - attack.t1027.010                                                                    │
-    │  - attack.t1027                                                                        │
-    │                                                                                        │
-    │                                                                                        │
-    │  Flags the characteristic tokens of this technique in command-line/script-block        │
-    │  telemetry.                                                                            │
-    │                                                                                        │
-    └────────────────────────────────────────────────────────────────────────────────────────┘
-    ┌─ ✗ KQL  (Microsoft Sentinel) ──────────────────────────────────────────────────────────┐
-    │                                                                                        │
-    │  ⚠ VALIDATION FAILED — Generated content has unbalanced parentheses/braces/brackets.   │
-    │                                                                                        │
-    │  DeviceProcessEvents                                                                   │
-    │  | where InitiatingProcessCommandLine matches regex                                    │
-    │  @"(?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}("                                      │
-    │  | project TimeGenerated, DeviceName, AccountName, InitiatingProcessCommandLine        │
-    │                                                                                        │
-    │  Flags the characteristic tokens of this technique in command-line/script-block        │
-    │  telemetry.                                                                            │
-    │                                                                                        │
-    └────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ✗ REGEX ────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                          │
+    │  ⚠ VALIDATION FAILED — Failed to compile after one retry: Pattern did not compile with   │
+    │  Python's re module: missing ), unterminated subpattern at position 44                   │
+    │                                                                                          │
+    │  (?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}(                                           │
+    │                                                                                          │
+    │  Flags the characteristic tokens of this technique in command-line/script-block          │
+    │  telemetry.                                                                              │
+    │                                                                                          │
+    └──────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ✓ SIGMA ────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                          │
+    │  selection:                                                                              │
+    │    CommandLine|re: (?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}(                         │
+    │  condition: selection                                                                    │
+    │                                                                                          │
+    │  Flags the characteristic tokens of this technique in command-line/script-block          │
+    │  telemetry.                                                                              │
+    │                                                                                          │
+    └──────────────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ ✗ KQL  (Microsoft Sentinel) ────────────────────────────────────────────────────────────┐
+    │                                                                                          │
+    │  ⚠ VALIDATION FAILED — Generated content has unbalanced parentheses/braces/brackets.     │
+    │                                                                                          │
+    │  ProcessCommandLine matches regex @"(?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}("       │
+    │                                                                                          │
+    │  Flags the characteristic tokens of this technique in command-line/script-block          │
+    │  telemetry.                                                                              │
+    │                                                                                          │
+    └──────────────────────────────────────────────────────────────────────────────────────────┘
+
 
                  scan summary                  
 ╭───────────────────┬─────────────────────────╮
@@ -200,16 +162,19 @@ rule types  regex, sigma, kql
 ```
 
 `--provider fake` above is real, not a mockup — it's a network-free built-in stub
-(`globwarden scan demo --provider fake`) that reproduces this output structurally
-with zero setup and no API key, right now (the Sigma rule `id:` fields are freshly
-generated UUIDs each run, since Sigma requires unique IDs — everything else is
-identical run to run). Point it at a real provider and a real report —
-`globwarden scan ./notes.pdf --provider openai` — and the pipeline, validation, and
-rendering are identical; only the findings come from a real model instead of the demo
-stub. And that `✗ REGEX` / `✗ KQL` pair above isn't a glitch left in by accident —
-it's the validation step doing its job: a rule that fails its syntactic check is
-shown anyway, flagged, with the real compiler/parser error attached. Nothing gets
-silently dropped.
+(`globwarden scan demo --provider fake`) that reproduces this output byte-for-byte
+with zero setup and no API key, right now. Point it at a real provider and a real
+report — `globwarden scan ./notes.pdf --provider openai` — and the pipeline,
+validation, and rendering are identical; only the findings come from a real model
+instead of the demo stub, and generation makes one combined LLM call per finding
+(covering every requested format at once) rather than one call per format. And that
+`✗ REGEX` / `✗ KQL` pair above isn't a glitch left in by accident — it's the
+validation step doing its job: content that fails its syntactic check is shown
+anyway, flagged, with the real compiler/parser error attached. Nothing gets
+silently dropped. Notice the REGEX/SIGMA/KQL panels above are just the matching
+expression for each language, not a complete standalone rule — no title, no
+logsource, no rule `id` — that's deliberate: GlobWarden hands you the detection
+logic to drop into your own rule structure, not a finished rule file.
 
 ## Quickstart
 
@@ -251,15 +216,19 @@ Full per-provider setup (API key details, local server install commands) lives i
 
 - **Five input types** — URL, local PDF, raw text, a code/script file, or an image,
   auto-detected from what you point it at.
-- **One pass, five outputs** — regex, KQL, SPL, YARA-L, and Sigma generated together
-  per finding, cross-referenced back to the technique that produced them.
+- **One combined call, five outputs** — regex, KQL, SPL, YARA-L, and Sigma matching
+  logic generated together per finding, cross-referenced back to the technique that
+  produced them. Output is the matching expression itself (a bare regex line, or
+  just Sigma's `detection:` block), not a complete standalone rule.
 - **Cloud or fully offline** — OpenAI, Anthropic, and Gemini for cloud use; Ollama
   and LM Studio for orgs that can't send threat intel to a third-party API.
 - **Vision-aware** — a screenshot of a report, tweet, or slide works as a source on
-  providers/models that support vision.
-- **Validated output, never silently dropped** — every generated rule is checked
-  for syntactic validity (does it compile as regex, parse as YAML, etc.) before
-  it's shown; rules that fail are flagged with a reason, not hidden.
+  providers/models that support vision; embedded screenshots in a fetched web page
+  are pulled out and analyzed too.
+- **Validated output, never silently dropped** — every generated matching
+  expression is checked for syntactic validity (does it compile as regex, parse as
+  YAML, etc.) before it's shown; content that fails is flagged with a reason, not
+  hidden.
 - **Confidence + ATT&CK mapping on every finding** — so you know what to
   double-check first, not just what the model produced.
 - **Terminal output built for demos** — colorized, structured `rich` rendering,
@@ -268,10 +237,10 @@ Full per-provider setup (API key details, local server install commands) lives i
 ## How it's different
 
 Narrow input (obfuscation TTPs specifically, not general IOC/TTP extraction), broad
-output (five rule languages in one pass, not one), and first-class local-LLM support
-for orgs that can't send threat intel to a cloud API. That's the real, defensible
-niche — GlobWarden doesn't replace analyst review or a certified rule-translation
-engine, and doesn't claim to.
+output (five query languages' worth of matching logic in one pass, not one), and
+first-class local-LLM support for orgs that can't send threat intel to a cloud API.
+That's the real, defensible niche — GlobWarden doesn't replace analyst review or a
+certified rule-translation engine, and doesn't claim to.
 
 Worth knowing what else is out there, honestly:
 
@@ -284,8 +253,8 @@ Worth knowing what else is out there, honestly:
 - **[Uncoder AI / Uncoder.io](https://uncoder.io)** (SOC Prime) is the dominant
   *rule translation* tool — Sigma/Roota into 48+ SIEM languages. It translates
   existing, already-written rules. GlobWarden does the step before that: reading a
-  report that has no rule yet and drafting the first one. Complementary, not
-  competing.
+  report that has no detection logic yet and drafting the matching expression for
+  it. Complementary, not competing.
 - **LLMCloudHunter and SigmaGen** are academic/research pipelines that proved the
   report-to-Sigma concept works (LLMCloudHunter reports 92% precision), but neither
   is a maintained OSS CLI, and both target a single output format.
@@ -337,6 +306,6 @@ Apache License 2.0 — see [`LICENSE`](LICENSE). Copyright (c) 2026 Tim Peck.
 
 ---
 
-STEEP#MAVERICK's wildcard alias trick didn't get a name until someone read the
-campaign write-up and did the translation work by hand — GlobWarden exists to make
-that translation faster, not to replace the read.
+A wildcard `Get-Alias`/`Get-Command` trick didn't get a name until someone read a
+report describing it and did the translation work by hand — GlobWarden exists to
+make that translation faster, not to replace the read.

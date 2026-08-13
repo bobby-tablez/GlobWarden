@@ -1,19 +1,29 @@
 """Prompt templates for the detection and rule-generation passes.
 
 Grounding note: the taxonomy, terminology, and syntax choices below are drawn from
-this project's speaker's own T1027.010 talk-kit reference material (the technique
-taxonomy write-up and the character-masking/wildcard-IEX cheat sheet), plus the
-already-validated Sigma rules built for that same talk. Nothing here is copied
-verbatim from those documents; they were used only to keep the prompts factually
-accurate and consistent with the underlying MITRE ATT&CK T1027.010 sub-technique
-(and its parent, T1027).
+this project's own T1027.010 reference research (technique taxonomy, character-
+masking/wildcard-IEX examples, and validated Sigma rules built during that
+research). Nothing here is copied verbatim from those materials; they were used
+only to keep the prompts factually accurate and consistent with the underlying
+MITRE ATT&CK T1027.010 sub-technique (and its parent, T1027).
 
 Two kinds of prompts live here:
 
 1. ``DETECTION_SYSTEM_PROMPT`` — used once per (chunk of) ingested content to pull
    structured ``ObfuscationFinding``-shaped JSON out of prose/code.
-2. ``RULE_GENERATION_PROMPTS`` — one system prompt per ``RuleType``, each used once
-   per finding to generate a single piece of detection content in that format.
+2. ``build_generation_system_prompt(rule_types)`` — one combined prompt per call,
+   covering every requested ``RuleType`` in a single response. GlobWarden's scope is
+   deliberately narrow: for every format, the model is asked for the minimal
+   matching expression (a regex line formatted for that query language, or a bare
+   Sigma ``detection:`` block) rather than a complete standalone rule with title/
+   metadata/logsource wrapping -- the analyst is expected to drop the result into
+   their own existing rule structure, not receive a finished rule file. This also
+   keeps responses small: one call per finding covers every requested format
+   instead of one call per (finding, rule_type) pair.
+
+   ``REGEX_SYSTEM_PROMPT`` is kept as a standalone prompt too (not just embedded
+   in the combined one) because a failed regex gets exactly one narrow, cheap
+   retry call using this prompt alone -- see ``engine.generate``.
 """
 
 from globwarden.models import RuleType
@@ -107,16 +117,29 @@ Respond with only the JSON object described in the system prompt."""
 
 
 # ---------------------------------------------------------------------------
-# Rule-generation pass — one system prompt per RuleType
+# Rule-generation pass
 # ---------------------------------------------------------------------------
+#
+# GlobWarden generates a minimal *matching expression* per format, not a
+# complete rule -- see module docstring. Every format below is described as a
+# self-contained block of instructions so `build_generation_system_prompt` can
+# assemble a single combined prompt covering only the formats actually
+# requested for a given scan.
 
-_REGEX_SYSTEM_PROMPT = """You are a detection engineering assistant. Given a single obfuscation \
+_GENERATION_HEADER = """You are a detection engineering assistant. Given a single obfuscation \
 technique finding (T1027.010 command obfuscation, or its parent T1027), generate \
-a Python-flavored regular expression (compatible with Python's `re` module) that \
+a matching expression in each of the format(s) listed below.
+
+For every format, produce ONLY the minimal matching expression needed to detect \
+this specific technique -- never a complete standalone rule with its own title, \
+id, metadata, logsource, or severity wrapping. The analyst already has their own \
+rule structure and just needs the matching logic to drop into it.
+"""
+
+_REGEX_BLOCK = """### regex
+A Python-flavored regular expression (compatible with Python's `re` module) that \
 would help flag command-line or script-block text exhibiting this specific \
 technique.
-
-Requirements:
 - The pattern must be a single valid Python `re` pattern string — it will be \
   passed directly to `re.compile()`. Do not wrap it in slashes, quotes, or a \
   regex-literal syntax from another language.
@@ -131,133 +154,61 @@ Requirements:
 Example — technique: backtick-split invocation of Invoke-Expression (e.g. \
 `I`E`X`, `I`n`v`o`k`e`-`E`x`p`r`e`s`s`i`o`n`):
 
-Correct pattern:
 (?i)i`e`x|i`n`v`o`k`e`-`e`x`p`r`e`s`s`i`o`n
 
-Example — technique: wildcard Get-Alias resolution feeding a call operator (e.g. \
-`&(Get-Alias i*x)`, `&(gal i*x)`):
+Return this under the "pattern" key, with a one-or-two-sentence "explanation" key \
+alongside it."""
 
-Correct pattern:
-(?i)&\\s*\\(\\s*(get-alias|gal)\\s+[a-z]*\\*[a-z]*\\s*\\)
-
-Respond with ONLY a single JSON object, no prose before or after it:
-{
-  "pattern": "the regex pattern string",
-  "explanation": "one or two plain-language sentences: what this catches and why"
-}
-"""
-
-_KQL_SYSTEM_PROMPT = """You are a detection engineering assistant writing Kusto Query Language \
-(KQL) queries for Microsoft Sentinel / Microsoft Defender advanced hunting. Given \
-a single obfuscation technique finding (T1027.010 command obfuscation, or its \
-parent T1027), generate a KQL query that hunts for command-line or script-block \
-telemetry exhibiting this specific technique.
-
-Requirements:
-- Query a plausible table for the telemetry involved — typically \
-  `DeviceProcessEvents` for command-line data, or `DeviceEvents` filtered to \
-  PowerShell Script Block Logging (ActionType `PowerShellCommand` or similar) \
-  when the technique only appears in the deobfuscated 4104 script block.
-- Use real KQL operators: `where`, `has`, `contains`, `matches regex`, `project`, \
-  `extend`. Use `@"..."` raw-string literals for regex patterns containing \
-  backslashes.
-- Keep the query runnable as a single statement (pipe-chained with `|`).
+_KQL_BLOCK = """### kql
+The single Kusto Query Language (KQL) filter clause -- not a full query -- that \
+applies this technique's regex against the most plausible telemetry field: \
+typically `ProcessCommandLine` (Microsoft Defender advanced hunting \
+`DeviceProcessEvents`) for command-line data, or `ScriptBlockText` for PowerShell \
+Script Block Logging (EventID 4104) content when the technique only appears in \
+deobfuscated script-block text. Use the `matches regex @"..."` form with a \
+raw-string literal.
 
 Example — technique: wildcard Get-Alias/Get-Command resolution of IEX:
 
-DeviceProcessEvents
-| where Timestamp > ago(7d)
-| where ProcessCommandLine has_any ("Get-Alias", "gal", "Get-Command", "gcm")
-| where ProcessCommandLine matches regex @"(?i)[a-z]*\\*[a-z]*"
-| project Timestamp, DeviceName, AccountName, ProcessCommandLine, InitiatingProcessFileName
+ProcessCommandLine matches regex @"(?i)[a-z]*\\*[a-z]*"
 
-Respond with ONLY a single JSON object, no prose before or after it:
-{
-  "query": "the KQL query text",
-  "explanation": "one or two plain-language sentences: what this catches and why"
-}
-"""
+Return this under the "line" key, with a one-or-two-sentence "explanation" key \
+alongside it."""
 
-_SPL_SYSTEM_PROMPT = """You are a detection engineering assistant writing Splunk Search \
-Processing Language (SPL) searches. Given a single obfuscation technique finding \
-(T1027.010 command obfuscation, or its parent T1027), generate an SPL search that \
-hunts for command-line or script-block telemetry exhibiting this specific \
-technique.
-
-Requirements:
-- Start with an `index=` and, where relevant, `sourcetype=` clause appropriate to \
-  Windows PowerShell Script Block Logging (`sourcetype=WinEventLog:Microsoft-Windows-PowerShell/Operational \
-  EventCode=4104`) or Sysmon/process-creation telemetry (`EventCode=1`), \
-  whichever fits the technique.
-- Use real SPL commands: `search`, `regex`, `where`, `rex`, `table`, `stats`. Use \
-  the `field=value` regex form (`ScriptBlockText=...`) or the explicit `regex` \
-  command for pattern matching.
-- Keep it a single pipe-chained SPL statement.
+_SPL_BLOCK = """### spl
+The single Splunk Search Processing Language (SPL) `regex` clause -- not a full \
+search -- that applies this technique's regex against the most plausible field: \
+typically `CommandLine` for process-creation telemetry (Sysmon EventCode 1), or \
+`ScriptBlockText` for PowerShell Script Block Logging (EventCode 4104) content.
 
 Example — technique: backtick-split invocation of Invoke-Expression:
 
-index=windows sourcetype="WinEventLog:Microsoft-Windows-PowerShell/Operational" EventCode=4104
-| regex ScriptBlockText="(?i)i`e`x|i`n`v`o`k`e`-`e`x`p`r`e`s`s`i`o`n"
-| table _time, host, ScriptBlockText
+regex ScriptBlockText="(?i)i`e`x|i`n`v`o`k`e`-`e`x`p`r`e`s`s`i`o`n"
 
-Respond with ONLY a single JSON object, no prose before or after it:
-{
-  "query": "the SPL search text",
-  "explanation": "one or two plain-language sentences: what this catches and why"
-}
-"""
+Return this under the "line" key, with a one-or-two-sentence "explanation" key \
+alongside it."""
 
-_YARA_L_SYSTEM_PROMPT = """You are a detection engineering assistant writing YARA-L 2.0 rules for \
-Google Security Operations (Chronicle). Given a single obfuscation technique \
-finding (T1027.010 command obfuscation, or its parent T1027), generate a YARA-L \
-2.0 rule that flags UDM events exhibiting this specific technique.
-
-Requirements:
-- Use the standard YARA-L 2.0 rule sections: `meta`, `events`, `condition` (add \
-  `match` or `outcome` only if genuinely needed — usually not, for a single-event \
-  command-line match).
-- In `events`, reference UDM fields on a single event variable (e.g. `$e`), such \
-  as `$e.metadata.event_type`, `$e.target.process.command_line`, or \
-  `$e.principal.process.command_line`. Use `re.regex(...)` or the `=~` \
-  case-insensitive-match style for pattern fields.
-- `meta` should include at least `description`, `author`, and `severity`.
-- `condition` should simply be the event variable (`$e`) for a single-event rule.
+_YARA_L_BLOCK = """### yara_l
+The single YARA-L 2.0 (Google Security Operations / Chronicle) UDM field-match \
+expression -- not a full rule -- that applies this technique's regex against the \
+most plausible field on a single event variable `$e` (e.g. \
+`$e.target.process.command_line` or `$e.principal.process.command_line`). Use \
+`re.regex(...)` or the `/pattern/ nocase` match-literal style.
 
 Example — technique: wildcard Get-Alias resolution of IEX:
 
-rule wildcard_get_alias_iex_resolution {
-  meta:
-    description = "Detects wildcard Get-Alias/Get-Command resolution used to invoke Invoke-Expression indirectly"
-    author = "GlobWarden"
-    severity = "High"
-  events:
-    $e.metadata.event_type = "PROCESS_LAUNCH"
-    $e.target.process.command_line = /(?i)(get-alias|gal|get-command|gcm).{0,40}\\*/ nocase
-  condition:
-    $e
-}
+$e.target.process.command_line = /(?i)(get-alias|gal|get-command|gcm).{0,40}\\*/ nocase
 
-Respond with ONLY a single JSON object, no prose before or after it:
-{
-  "rule": "the full YARA-L rule text",
-  "explanation": "one or two plain-language sentences: what this catches and why"
-}
-"""
+Return this under the "line" key, with a one-or-two-sentence "explanation" key \
+alongside it."""
 
-_SIGMA_SYSTEM_PROMPT = """You are a detection engineering assistant writing Sigma rules (the \
-generic, backend-agnostic detection rule format). Given a single obfuscation \
-technique finding (T1027.010 command obfuscation, or its parent T1027), generate \
-a complete, valid Sigma rule that detects it.
-
-Requirements — the rule MUST be valid YAML and MUST include all of: `title`, \
-`id` (a fresh random-looking UUIDv4-shaped string), `status`, `description`, \
-`logsource` (with `category` and `product`), `detection` (with at least one \
-named selection and a `condition` key), `level`, and `tags` (include at least \
-`attack.defense-evasion`, `attack.t1027.010`, and `attack.t1027`).
-- For PowerShell script-block content, use `logsource: {category: ps_script, product: windows}` \
-  and match against the `ScriptBlockText` field.
-- For process command-line content, use `logsource: {category: process_creation, product: windows}` \
-  and match against the `CommandLine` field.
+_SIGMA_BLOCK = """### sigma
+Only the Sigma `detection:` block content for this technique -- the selection(s) \
+plus the `condition` key -- as a YAML mapping. Do NOT include `title`, `id`, \
+`status`, `description`, `logsource`, `level`, `tags`, or `falsepositives`; those \
+belong to the analyst's own rule wrapper, not to you.
+- For PowerShell script-block content, match against the `ScriptBlockText` field. \
+  For process command-line content, match against the `CommandLine` field.
 - Use standard Sigma modifiers: `|contains`, `|contains|all`, `|re`, `|startswith`, etc.
 - `condition` must reference the selection name(s) you defined (e.g. `selection`, \
   or `1 of selection_*`).
@@ -272,65 +223,89 @@ named selection and a `condition` key), `level`, and `tags` (include at least \
   technique-specific literal match into an unrelated, much broader wildcard match \
   — a real mistake to avoid, not a stylistic preference.
 
-Example (real, validated rule from this exact problem domain):
+Example — technique: wildcard Get-Alias/Get-Command resolution of IEX or IRM:
 
-title: PowerShell Wildcard Get-Alias/Get-Command Resolution of IEX or IRM
-id: 6d46452c-bb28-4f25-9593-30eed499542e
-status: experimental
-description: |
-  Detects PowerShell script block content that uses Get-Alias ("gal") or
-  Get-Command ("gcm") with a wildcard pattern to resolve the alias for
-  Invoke-Expression ("iex") or Invoke-RestMethod ("irm") at runtime, then
-  invokes the resolved command via the call operator.
-logsource:
-  category: ps_script
-  product: windows
-detection:
-  selection_alias_lookup:
-    ScriptBlockText|contains:
-      - '(gal '
-      - '(gcm '
-      - 'Get-Alias '
-      - 'Get-Command '
-  selection_exec_alias_target:
-    ScriptBlockText|contains:
-      - 'i\\*x'
-      - '\\?ex'
-      - '\\?rm'
-  condition: selection_alias_lookup and selection_exec_alias_target
-falsepositives:
-  - PowerShell module-development or alias-auditing scripts that legitimately
-    enumerate aliases with wildcards.
-level: high
-tags:
-  - attack.defense-evasion
-  - attack.t1027.010
-  - attack.t1027
+selection_alias_lookup:
+  ScriptBlockText|contains:
+    - '(gal '
+    - '(gcm '
+    - 'Get-Alias '
+    - 'Get-Command '
+selection_exec_alias_target:
+  ScriptBlockText|contains:
+    - 'i\\*x'
+    - '\\?ex'
+    - '\\?rm'
+condition: selection_alias_lookup and selection_exec_alias_target
 
-Respond with ONLY a single JSON object, no prose before or after it:
-{
-  "rule_yaml": "the full Sigma rule as a YAML string",
-  "explanation": "one or two plain-language sentences: what this catches and why"
-}
-"""
+Return the YAML text (as a single string, not a nested object) under the \
+"detection_yaml" key, with a one-or-two-sentence "explanation" key alongside it."""
 
-RULE_GENERATION_PROMPTS: dict[RuleType, str] = {
-    RuleType.REGEX: _REGEX_SYSTEM_PROMPT,
-    RuleType.KQL: _KQL_SYSTEM_PROMPT,
-    RuleType.SPL: _SPL_SYSTEM_PROMPT,
-    RuleType.YARA_L: _YARA_L_SYSTEM_PROMPT,
-    RuleType.SIGMA: _SIGMA_SYSTEM_PROMPT,
+_RULE_TYPE_BLOCKS: dict[RuleType, str] = {
+    RuleType.REGEX: _REGEX_BLOCK,
+    RuleType.KQL: _KQL_BLOCK,
+    RuleType.SPL: _SPL_BLOCK,
+    RuleType.YARA_L: _YARA_L_BLOCK,
+    RuleType.SIGMA: _SIGMA_BLOCK,
 }
 
-# Key the LLM is expected to put the generated rule body under, per rule type —
-# used by generate.py to pull the right field out of the parsed JSON response.
+# Top-level JSON key each format's section lives under in a combined response.
+# Matches RuleType.value, which is already a safe, stable JSON-key spelling.
+RULE_SECTION_KEY: dict[RuleType, str] = {rule_type: rule_type.value for rule_type in RuleType}
+
+# Key each format's matching-expression content is nested under, within its
+# own section -- used by generate.py to pull the right field out of the
+# parsed response.
 RULE_CONTENT_KEY: dict[RuleType, str] = {
     RuleType.REGEX: "pattern",
-    RuleType.KQL: "query",
-    RuleType.SPL: "query",
-    RuleType.YARA_L: "rule",
-    RuleType.SIGMA: "rule_yaml",
+    RuleType.KQL: "line",
+    RuleType.SPL: "line",
+    RuleType.YARA_L: "line",
+    RuleType.SIGMA: "detection_yaml",
 }
+
+
+def build_generation_system_prompt(rule_types: list[RuleType]) -> str:
+    """Assemble one combined system prompt covering every format in `rule_types`.
+
+    One call now covers every requested format for a finding, instead of one
+    call per (finding, rule_type) pair -- the dominant lever for GlobWarden's
+    call count and latency on a real scan.
+    """
+    blocks = "\n\n".join(_RULE_TYPE_BLOCKS[rt] for rt in rule_types)
+    schema_lines = []
+    for rt in rule_types:
+        content_key = RULE_CONTENT_KEY[rt]
+        schema_lines.append(f'  "{RULE_SECTION_KEY[rt]}": {{"{content_key}": "...", "explanation": "..."}}')
+    schema = "{\n" + ",\n".join(schema_lines) + "\n}"
+
+    return f"""{_GENERATION_HEADER}
+{blocks}
+
+Respond with ONLY a single JSON object, no prose before or after it, with exactly \
+one top-level key per format requested above:
+
+{schema}
+"""
+
+
+# Standalone single-purpose regex prompt, kept separate from the combined one
+# above: a regex that fails to compile gets exactly one narrow, cheap retry
+# call using this prompt alone (see engine.generate) rather than re-running
+# the full combined generation for every requested format.
+REGEX_SYSTEM_PROMPT = f"""You are a detection engineering assistant. Given a single obfuscation \
+technique finding (T1027.010 command obfuscation, or its parent T1027), generate \
+a Python-flavored regular expression that would help flag command-line or \
+script-block text exhibiting this specific technique.
+
+{_REGEX_BLOCK}
+
+Respond with ONLY a single JSON object, no prose before or after it:
+{{
+  "pattern": "the regex pattern string",
+  "explanation": "one or two plain-language sentences: what this catches and why"
+}}
+"""
 
 
 def rule_generation_user_prompt(
@@ -340,7 +315,7 @@ def rule_generation_user_prompt(
     finding_category: str,
     attack_mapping: str,
 ) -> str:
-    """Build the user-turn prompt for a single finding x rule-type generation call."""
+    """Build the user-turn prompt for a single finding's generation call."""
     snippet_block = (
         f"Example snippet from source:\n{finding_example_snippet}\n"
         if finding_example_snippet

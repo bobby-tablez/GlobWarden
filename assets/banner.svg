@@ -64,7 +64,7 @@
   <text x="240" y="168" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-weight="700" font-size="64" fill="#eef3f7" letter-spacing="1">Glob<tspan fill="url(#accent)">Warden</tspan></text>
 
   <!-- tagline -->
-  <text x="242" y="205" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="19" fill="#8fa3b3">One obfuscated pattern in, five ready-to-use detection rules out.</text>
+  <text x="242" y="205" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="19" fill="#8fa3b3">One obfuscated pattern in, regex-based detection logic out.</text>
 
   <!-- bottom meta row, terminal-prompt styled -->
   <text x="242" y="240" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="15" fill="#f2a53c">$</text>

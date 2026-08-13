@@ -38,8 +38,8 @@ contributor's module finished to test the piece you're working on.
   └────────────────────┘   defensively regardless of json_mode)      │
          │                                                            │
          ▼                                                            ▼
-  ┌────────────────────┐   list[GeneratedRule]  (one per finding × rule type)
-  │  engine.generate    │────────────────────────────────────────────┐
+  ┌────────────────────┐   list[GeneratedRule]  (one combined LLM call per finding,
+  │  engine.generate    │────────────────────────────────────────────┐  covering every requested rule_type at once)
   │  .generate_rules()  │  regex · KQL · SPL · YARA-L · Sigma          │
   │  (findings, types,  │  each syntactically validated before return; │
   │   provider)         │  invalid=False + validation_note, never      │
@@ -97,7 +97,11 @@ globwarden/
     detect_source.py  Single entry point (`load(source)`); sniffs
                        whether `source` is a URL, PDF path, image path,
                        or raw text/code, and dispatches accordingly.
-    url.py             Fetches + extracts readable text from a web page.
+    url.py             Fetches + extracts readable text from a web page,
+                       plus a bounded number of embedded content-sized
+                       <img> screenshots from the article body for vision
+                       analysis (filtered before download; icons/logos/
+                       tracking pixels/etc. never fetched).
     pdf.py             Extracts text (and, where present, embedded
                        images) from a local PDF.
     text.py            Raw text/code file loader — the fallback for
@@ -113,11 +117,16 @@ globwarden/
     detect.py    find_obfuscation(content, provider) -> list[ObfuscationFinding].
                  Builds the detection prompt from prompts.py, calls the
                  provider, parses/validates the LLM's JSON defensively
-                 (never trusts json_mode alone).
+                 (never trusts json_mode alone). Long content is chunked;
+                 independent chunks' calls run concurrently.
     generate.py   generate_rules(findings, rule_types, provider) ->
-                 list[GeneratedRule]. One prompt per (finding, rule_type)
-                 pair, plus per-format syntactic validation (regex
-                 compiles, YAML parses for Sigma, etc.).
+                 list[GeneratedRule]. One combined call per finding --
+                 covering every requested rule_type in a single response,
+                 asking for the minimal matching expression per format
+                 (not a complete standalone rule) -- plus per-format
+                 syntactic validation (regex compiles, YAML parses for
+                 Sigma, etc.). Independent findings' calls run
+                 concurrently, bounded by DEFAULT_MAX_CONCURRENCY.
     prompts.py    Shared prompt templates for both detect.py and
                  generate.py — the wording that encodes "narrow input,
                  broad output, analyst-review-required" into the model's
