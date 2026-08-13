@@ -187,6 +187,70 @@ Rule generation lives in `globwarden/engine/generate.py`, driven by templates in
 7. One maintainer approval is required before merge. Be patient; this is a
    part-time-maintained project.
 
+## Releasing (maintainers only)
+
+Publishing to PyPI is automated via `.github/workflows/publish.yml`, but it's
+triggered deliberately by a version tag — never by a plain push to `main`. PyPI
+versions are immutable (a given version number can never be re-uploaded or
+overwritten), so auto-publishing on every commit isn't practical or safe.
+
+To cut a release:
+
+```bash
+# 1. Bump the version
+#    edit pyproject.toml: version = "0.1.1"
+
+# 2. Commit and merge that change to main as normal
+
+# 3. Tag the release commit and push the tag
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+Pushing the tag triggers the workflow: build the sdist/wheel → publish to
+**TestPyPI** first (a dry run that catches packaging/metadata problems without
+burning a permanent version number on real PyPI) → publish to **PyPI**.
+
+### One-time setup: registering the trusted publishers
+
+This project uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+(OIDC) instead of a stored API token — no secret to generate, rotate, or leak.
+Before the very first release, a maintainer with access to the `globwarden` PyPI
+project needs to register this repo/workflow as a trusted publisher, **once, on
+each of PyPI and TestPyPI**:
+
+1. Go to **pypi.org** → Account settings → [Publishing](https://pypi.org/manage/account/publishing/)
+   (if the `globwarden` project doesn't exist yet, use the "pending publisher" flow
+   on that same page — PyPI creates the project automatically on the first
+   successful publish from a registered pending publisher).
+2. Add a new publisher with exactly these values:
+
+   | Field | Value |
+   |---|---|
+   | PyPI Project Name | `globwarden` |
+   | Owner | `bobby-tablez` |
+   | Repository name | `GlobWarden` |
+   | Workflow name | `publish.yml` |
+   | Environment name | `pypi` |
+
+3. Repeat the same steps at **test.pypi.org** → Publishing, with one difference:
+
+   | Field | Value |
+   |---|---|
+   | Environment name | `testpypi` |
+
+   (all other fields identical to the table above)
+
+The "Environment name" field must match the `environment: name:` value in
+`publish.yml` exactly (`pypi` for the real publish job, `testpypi` for the dry-run
+job) — this is what scopes the trust relationship to that specific job, not just
+the repo in general.
+
+No PyPI username, password, or API token is ever given to CI, stored as a GitHub
+secret, or shared with anyone outside this one-time browser-based registration
+step — GitHub Actions proves its identity to PyPI automatically at publish time
+via a short-lived OIDC token.
+
 ## Reporting issues
 
 Bug reports and feature requests are welcome via GitHub Issues. For bug reports,
