@@ -72,7 +72,13 @@ CRITICAL RULES:
 3. `example_snippet` must be a verbatim excerpt from the source content (copy the \
    exact characters), not something you wrote yourself. If the source describes a \
    technique in prose only, with no code/command example present, set \
-   `example_snippet` to null.
+   `example_snippet` to null. Obfuscated command examples routinely contain \
+   double-quote characters, backslashes, and other characters that are special in \
+   JSON — when you copy one into this string value, JSON-escape it properly: a \
+   literal double-quote character becomes a backslash followed by a double-quote, \
+   a literal backslash character becomes two backslashes in a row, and a literal \
+   line break becomes a backslash followed by the letter n. Do not let a raw \
+   copied quote or backslash break your own response.
 4. `confidence` is your own self-assessed confidence (0.0-1.0) that this is a \
    genuine T1027.010-style obfuscation technique correctly identified from the \
    source — not a measure of how dangerous it is.
@@ -150,6 +156,11 @@ technique.
   `\\*`, `\\$`, `\\(`, `\\)`).
 - Keep it narrowly targeted at the technique described in the finding — don't \
   write an overly broad pattern that would flag unrelated, benign PowerShell.
+- Remember this pattern is itself a JSON string value: every backslash you write \
+  for the *regex's own* escaping (`\\s`, `\\*`, `\\(`, ...) needs a second backslash \
+  on top of that for JSON (so `\\s` in the actual pattern is written as `\\\\s` in \
+  your JSON response). Getting this wrong produces invalid JSON, not just a wrong \
+  pattern.
 
 Example — technique: backtick-split invocation of Invoke-Expression (e.g. \
 `I`E`X`, `I`n`v`o`k`e`-`E`x`p`r`e`s`s`i`o`n`):
