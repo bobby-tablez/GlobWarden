@@ -39,18 +39,21 @@ from globwarden.models import IngestedContent
 _URL_SCHEMES = {"http", "https"}
 
 
-def load(source: str) -> IngestedContent:
+def load(source: str, *, user_agent: str | None = None) -> IngestedContent:
     """Detect what `source` is and load it into `IngestedContent`.
 
     `source` is a single string: a URL, a local file path, or raw text
     content. This is the one function the rest of GlobWarden's pipeline
     calls to turn a CLI argument into ingested content.
+
+    `user_agent`, if given, overrides `ingest.url.DEFAULT_USER_AGENT` for URL
+    fetches only -- ignored for every other source type.
     """
     if not isinstance(source, str):
         raise TypeError(f"load() expects a str, got {type(source).__name__}")
 
     if _looks_like_url(source):
-        return from_url(source)
+        return from_url(source, user_agent=user_agent)
 
     path = _existing_file_path(source)
     if path is not None:

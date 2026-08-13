@@ -34,9 +34,19 @@ from globwarden.ingest.errors import FetchError, SizeLimitExceeded
 from globwarden.ingest.pdf import MAX_PDF_BYTES, from_pdf
 from globwarden.models import IngestedContent, SourceType
 
-# A real, identifiable UA string. Some sites block generic/blank UAs outright,
-# and it's good etiquette for a tool that's going to scrape public reports.
-USER_AGENT = "GlobWarden/0.1 (+https://github.com/globwarden/globwarden; threat-intel ingestion bot) python-requests"
+# Default UA is a standard, current browser string. Threat-intel/security blogs
+# in particular tend to run aggressive anti-scraping WAFs that block on sight
+# anything that self-identifies as a bot or contains "python-requests" -- a
+# real, honestly-labeled UA was tried first and got blocked by real sources
+# (e.g. securonix.com returns HTTP 403 to it but 200 to this one), so this is
+# a deliberate usability-over-transparency tradeoff, not an oversight.
+# Override with --user-agent / GLOBWARDEN_USER_AGENT if you want something
+# else -- HONEST_USER_AGENT below is provided as a ready-to-use opt-in for
+# anyone who'd rather identify honestly and accept that some sites will 403 it.
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+HONEST_USER_AGENT = "GlobWarden/0.1 (+https://github.com/bobby-tablez/GlobWarden; threat-intel ingestion bot)"
 
 # (connect timeout, read timeout) in seconds. Generous enough for a slow blog
 # host, tight enough that a single dead/malicious server can't hang a CLI run
@@ -67,6 +77,7 @@ def from_url(
     timeout: tuple[float, float] = DEFAULT_TIMEOUT,
     max_bytes: int = MAX_DOWNLOAD_BYTES,
     max_pdf_bytes: int = MAX_PDF_BYTES,
+    user_agent: str | None = None,
 ) -> IngestedContent:
     """Fetch `url` and return its content as `IngestedContent`.
 
@@ -83,7 +94,7 @@ def from_url(
     - Otherwise the response is treated as HTML and the main article text is
       extracted (see module docstring for extractor choice).
     """
-    headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
+    headers = {"User-Agent": user_agent or DEFAULT_USER_AGENT, "Accept": "*/*"}
 
     try:
         response = requests.get(url, headers=headers, timeout=timeout, stream=True, allow_redirects=True)

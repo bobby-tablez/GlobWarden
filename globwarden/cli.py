@@ -505,7 +505,7 @@ def _warn_if_path_like_typo(source: str, console: Console) -> None:
     )
 
 
-def _load_source(source: str, *, verbose: bool, console: Console | None = None) -> IngestedContent:
+def _load_source(source: str, *, verbose: bool, console: Console | None = None, user_agent: str | None = None) -> IngestedContent:
     if source.strip().lower() == "demo":
         return _demo_content(source)
 
@@ -528,7 +528,7 @@ def _load_source(source: str, *, verbose: bool, console: Console | None = None) 
         ) from exc
 
     try:
-        return detect_source.load(source)
+        return detect_source.load(source, user_agent=user_agent)
     except _IngestError as exc:
         raise CLIError("could not read source", str(exc) or exc.__class__.__name__) from exc
     except CLIError:
@@ -791,6 +791,14 @@ def scan(
         "--base-url",
         help="Override the provider's base URL (mainly for Ollama/LM Studio or a self-hosted OpenAI-compatible endpoint).",
     ),
+    user_agent: str | None = typer.Option(
+        None,
+        "--user-agent",
+        envvar="GLOBWARDEN_USER_AGENT",
+        help="Override the User-Agent sent for URL fetches (default: a standard browser "
+        "string, since some sites -- security/threat-intel blogs especially -- block "
+        "requests that self-identify as a bot).",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Ingest + detect only; skip rule generation."),
     verbose: bool = typer.Option(
         False,
@@ -840,7 +848,7 @@ def scan(
     try:
         with render.pipeline_progress(err_console) as stage:
             stage.stage("[1/3] ingesting source…")
-            content = _load_source(source, verbose=verbose, console=err_console)
+            content = _load_source(source, verbose=verbose, console=err_console, user_agent=user_agent)
 
             stage.stage("[2/3] detecting obfuscation techniques…")
             findings = _find_obfuscation(content, provider_inst)

@@ -63,6 +63,7 @@ def test_scan_help_documents_all_required_options():
         "--output",
         "--api-key",
         "--base-url",
+        "--user-agent",
         "--dry-run",
         "--verbose",
     ]:
@@ -188,6 +189,38 @@ def test_scan_no_findings_verbose_actually_shows_what_was_ingested():
     assert "ingested content" in verbose.stdout.lower()
     assert "totally unrelated text about lunch plans" in verbose.stdout
     assert "ingested content" not in quiet.stdout.lower()
+
+
+def test_scan_user_agent_flag_reaches_the_actual_http_request():
+    """End-to-end regression: --user-agent must actually flow from the CLI
+    flag through detect_source.load() to the real outgoing HTTP request, not
+    just be accepted and silently dropped somewhere in the plumbing."""
+    import responses
+
+    @responses.activate
+    def run():
+        responses.add(
+            responses.GET,
+            "https://example.test/report",
+            body="<html><body><p>Get-Alias i*x resolves to Invoke-Expression.</p></body></html>",
+            status=200,
+        )
+        result = runner.invoke(
+            cli_module.app,
+            [
+                "scan",
+                "https://example.test/report",
+                "--provider",
+                "fake",
+                "--dry-run",
+                "--user-agent",
+                "RegressionTestAgent/9.9",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert responses.calls[0].request.headers["User-Agent"] == "RegressionTestAgent/9.9"
+
+    run()
 
 
 def test_scan_respects_rules_subset():

@@ -48,6 +48,49 @@ attacker-controlled code without ever typing the literal string
 """
 
 
+def test_default_user_agent_is_not_self_identifying_as_a_bot():
+    """Regression: the original default UA self-identified as a bot
+    ('GlobWarden/... threat-intel ingestion bot ... python-requests') and a
+    real source (securonix.com) was confirmed live to return HTTP 403 to it
+    while returning 200 to a standard browser UA -- security/threat-intel
+    blogs are exactly the kind of site that runs aggressive anti-scraping
+    WAFs blocking on sight anything that looks like a scraper. Also
+    regression-locks that HONEST_USER_AGENT (the opt-in alternative) points
+    at the real repo, not the placeholder URL used before the repo existed."""
+    assert "python-requests" not in url_module.DEFAULT_USER_AGENT.lower()
+    assert "bot" not in url_module.DEFAULT_USER_AGENT.lower()
+    assert "mozilla" in url_module.DEFAULT_USER_AGENT.lower()
+    assert "github.com/bobby-tablez/globwarden" in url_module.HONEST_USER_AGENT.lower()
+
+
+@responses.activate
+def test_from_url_sends_default_user_agent_by_default():
+    responses.add(
+        responses.GET,
+        "https://example.test/report",
+        body=SAMPLE_HTML,
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
+    from_url("https://example.test/report")
+    assert responses.calls[0].request.headers["User-Agent"] == url_module.DEFAULT_USER_AGENT
+
+
+@responses.activate
+def test_from_url_user_agent_override_is_actually_sent():
+    responses.add(
+        responses.GET,
+        "https://example.test/report",
+        body=SAMPLE_HTML,
+        status=200,
+        content_type="text/html; charset=utf-8",
+    )
+    from_url("https://example.test/report", user_agent="MyCustomAgent/1.0")
+    sent = responses.calls[0].request.headers["User-Agent"]
+    assert sent == "MyCustomAgent/1.0"
+    assert sent != url_module.DEFAULT_USER_AGENT
+
+
 @responses.activate
 def test_from_url_extracts_html_article_text():
     responses.add(
