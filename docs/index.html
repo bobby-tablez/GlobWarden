@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GlobWarden — Report in. Detection content out.</title>
+<meta name="description" content="GlobWarden: a CLI that reads threat-intel reports and turns command-obfuscation techniques (MITRE ATT&amp;CK T1027.010) into regex, KQL, SPL, YARA-L, and Sigma detection content in one pass — with cloud or fully local LLMs." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230d1211'/%3E%3Cpolygon points='92,50 71,86 29,86 8,50 29,14 71,14' fill='none' stroke='%23f2a53c' stroke-width='6'/%3E%3Cg stroke='%23f2a53c' stroke-width='6' stroke-linecap='round'%3E%3Cline x1='26' y1='50' x2='74' y2='50'/%3E%3Cline x1='38' y1='29' x2='62' y2='71'/%3E%3Cline x1='62' y1='29' x2='38' y2='71'/%3E%3C/g%3E%3C/svg%3E" />
+<style>
+/* ============================= TOKENS ============================= */
+:root{
+  --bg:            #0a0d0c;
+  --bg-alt:        #0d1211;
+  --panel:         #121815;
+  --panel-2:       #161d19;
+  --border:        #253029;
+  --border-strong: #3a4b41;
+  --fg:            #edf3ef;
+  --fg-dim:        #93a89f;
+  --fg-faint:      #55655d;
+  --accent:        #f2a53c;
+  --accent-rgb:    242,165,60;
+  --accent-soft:   rgba(242,165,60,0.12);
+  --accent-2:      #62d2e8;
+  --accent-2-rgb:  98,210,232;
+  --accent-2-soft: rgba(98,210,232,0.12);
+  --ok:            #5fd68c;
+  --ok-soft:       rgba(95,214,140,0.12);
+  --danger:        #ff6259;
+  --danger-soft:   rgba(255,98,89,0.12);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Menlo", "Liberation Mono", monospace;
+  --maxw: 1180px;
+  --pad: clamp(20px, 5vw, 48px);
+}
+
+*{ box-sizing:border-box; }
+html{ background:var(--bg); }
+body{
+  margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-sans);
+  -webkit-font-smoothing:antialiased; line-height:1.5;
+  overflow-x:hidden;
+}
+::selection{ background:rgba(var(--accent-rgb),0.35); color:#fff; }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+a{ color:inherit; }
+img,svg{ max-width:100%; }
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; }
+}
+
+.wrap{ max-width:var(--maxw); margin:0 auto; padding-left:var(--pad); padding-right:var(--pad); }
+.section{ padding-top:clamp(56px,8vw,108px); padding-bottom:clamp(56px,8vw,108px); }
+.section-head{ margin-bottom:clamp(32px,5vw,52px); }
+
+.eyebrow{
+  display:inline-flex; align-items:center; gap:10px;
+  font-family:var(--font-mono); font-size:13px; letter-spacing:3px;
+  text-transform:uppercase; color:var(--accent); margin:0 0 16px;
+}
+.eyebrow::before{ content:""; width:22px; height:2px; background:var(--accent); flex:none; }
+.eyebrow.cyan{ color:var(--accent-2); }
+.eyebrow.cyan::before{ background:var(--accent-2); }
+
+h2.h2{
+  font-family:var(--font-sans); font-weight:750; font-size:clamp(26px,3.6vw,38px);
+  line-height:1.18; letter-spacing:-0.01em; text-wrap:balance; color:var(--fg); margin:0 0 14px; max-width:760px;
+}
+.section-lede{ font-size:clamp(16px,1.6vw,18px); color:var(--fg-dim); max-width:680px; margin:0; line-height:1.55; }
+
+.mono{ font-family:var(--font-mono); }
+.tabnum{ font-variant-numeric:tabular-nums; }
+
+/* ============================= BUTTONS ============================= */
+.btn{
+  display:inline-flex; align-items:center; gap:9px; font-family:var(--font-mono); font-size:14px;
+  letter-spacing:0.5px; padding:12px 22px; border-radius:8px; text-decoration:none; font-weight:600;
+  border:1px solid transparent; cursor:pointer; transition:transform .15s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease, color .15s ease;
+  white-space:nowrap;
+}
+.btn:hover{ transform:translateY(-1px); }
+.btn-primary{ background:var(--accent); color:#1a1204; border-color:var(--accent); }
+.btn-primary:hover{ box-shadow:0 8px 24px rgba(var(--accent-rgb),0.25); background:#f5b158; }
+.btn-ghost{ background:transparent; color:var(--fg); border-color:var(--border-strong); }
+.btn-ghost:hover{ border-color:var(--accent); color:var(--accent); }
+.btn svg{ width:16px; height:16px; flex:none; }
+
+/* ============================= TOPBAR ============================= */
+.topbar{
+  position:sticky; top:0; z-index:40; background:rgba(10,13,12,0.86); backdrop-filter:saturate(140%) blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.topbar .wrap{ display:flex; align-items:center; justify-content:space-between; gap:16px; height:64px; }
+.brand{ display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--fg); }
+.brand svg{ width:26px; height:26px; flex:none; }
+.brand .word{ font-family:var(--font-mono); font-weight:700; font-size:17px; letter-spacing:0.2px; }
+.brand .word b{ color:var(--accent); font-weight:700; }
+.topnav{ display:flex; align-items:center; gap:26px; }
+.topnav a{ font-family:var(--font-mono); font-size:13px; color:var(--fg-dim); text-decoration:none; letter-spacing:0.3px; }
+.topnav a:hover{ color:var(--fg); }
+.topbar .btn{ padding:8px 16px; font-size:13px; }
+@media (max-width:720px){ .topnav a.navlink{ display:none; } }
+
+/* ============================= HERO ============================= */
+.hero{ padding-top:clamp(56px,9vw,120px); position:relative; }
+.hero::before{
+  content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(ellipse 900px 480px at 12% 0%, rgba(var(--accent-rgb),0.08), transparent 62%),
+    radial-gradient(ellipse 800px 500px at 100% 20%, rgba(var(--accent-2-rgb),0.05), transparent 60%);
+}
+.hero-mark{ display:flex; align-items:center; gap:14px; margin-bottom:28px; }
+.hero-mark svg{ width:44px; height:44px; flex:none; }
+.wordmark{ font-family:var(--font-mono); font-weight:700; font-size:22px; letter-spacing:0.3px; color:var(--fg); }
+.wordmark b{ color:var(--accent); }
+.hero h1{
+  font-family:var(--font-sans); font-weight:750; font-size:clamp(34px,6vw,58px); line-height:1.08;
+  letter-spacing:-0.015em; text-wrap:balance; color:var(--fg); margin:0 0 22px; max-width:900px;
+}
+.hero h1 .accent{ color:var(--accent); }
+.hero .lede{ font-size:clamp(17px,2vw,21px); color:var(--fg-dim); line-height:1.55; max-width:680px; margin:0 0 28px; }
+.hero-ctas{ display:flex; flex-wrap:wrap; gap:14px; margin-bottom:40px; }
+
+.statstrip{
+  display:flex; flex-wrap:wrap; gap:0; border:1px solid var(--border); border-radius:12px; overflow:hidden;
+  background:var(--panel); max-width:760px; margin-bottom:44px;
+}
+.statstrip .stat{ flex:1 1 160px; padding:18px 22px; border-right:1px solid var(--border); }
+.statstrip .stat:last-child{ border-right:none; }
+.statstrip .num{ font-family:var(--font-mono); font-weight:700; font-size:26px; color:var(--accent); line-height:1; }
+.statstrip .lbl{ font-family:var(--font-mono); font-size:12px; color:var(--fg-dim); letter-spacing:0.3px; margin-top:8px; }
+
+.origin{
+  border-left:3px solid var(--accent); padding:4px 0 4px 26px; margin:0; max-width:760px;
+}
+.origin p{ font-size:clamp(17px,2vw,20px); line-height:1.5; color:var(--fg); margin:0 0 10px; font-weight:500; text-wrap:balance; }
+.origin cite{ font-family:var(--font-mono); font-size:13px; color:var(--fg-faint); font-style:normal; letter-spacing:0.4px; }
+
+/* ============================= CARDS / GRID ============================= */
+.card{
+  background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:26px 24px;
+}
+.card h3{ font-family:var(--font-sans); font-size:18px; font-weight:700; color:var(--fg); margin:0 0 10px; }
+.card p{ font-size:15px; color:var(--fg-dim); line-height:1.55; margin:0; }
+.card .icon{ width:34px; height:34px; margin-bottom:16px; color:var(--accent); }
+
+.features-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:20px; }
+@media (max-width:720px){ .features-grid{ grid-template-columns:1fr; } }
+
+/* ============================= TERMINAL WINDOW ============================= */
+.term{
+  background:var(--bg-alt); border:1px solid var(--border); border-radius:10px; overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,0.35);
+}
+.term .chrome{
+  display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg, var(--panel-2), var(--bg-alt));
+}
+.term .dot{ width:10px; height:10px; border-radius:50%; background:var(--border-strong); }
+.term .label{ margin-left:8px; font-family:var(--font-mono); font-size:12px; color:var(--fg-faint); letter-spacing:0.4px; }
+.term .body{
+  margin:0; padding:20px 22px 26px; font-family:var(--font-mono); font-size:13.5px; line-height:1.72;
+  color:var(--fg-dim); overflow-x:auto; white-space:pre;
+}
+@media (max-width:560px){ .term .body{ font-size:12px; padding:16px; } }
+.term .body b{ font-weight:inherit; }
+.t-prompt{ color:var(--fg-faint); }
+.t-cmd{ color:var(--fg); }
+.t-dim{ color:var(--fg-faint); }
+.t-ok{ color:var(--ok); }
+.t-accent{ color:var(--accent); }
+.t-cyan{ color:var(--accent-2); }
+.t-danger{ color:var(--danger); }
+.t-fg{ color:var(--fg); }
+.cursor{ display:inline-block; width:8px; height:15px; background:var(--fg-dim); vertical-align:-2px; animation:blink 1.1s steps(1) infinite; }
+@keyframes blink{ 50%{ opacity:0; } }
+
+/* ============================= PIPELINE DIAGRAM ============================= */
+.diagram-frame{
+  background:var(--panel); border:1px solid var(--border); border-radius:14px;
+  padding:clamp(20px,4vw,40px); display:flex; justify-content:center;
+}
+.diagram-frame svg{ width:100%; max-width:460px; height:auto; overflow:visible; }
+.pipe-caption{ margin-top:18px; font-size:14px; color:var(--fg-faint); text-align:center; max-width:520px; margin-left:auto; margin-right:auto; }
+
+/* ============================= TABLE ============================= */
+.tbl-wrap{ overflow-x:auto; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
+table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
+.ctable th, .ctable td{ text-align:left; padding:16px 18px; border-bottom:1px solid var(--border); vertical-align:top; font-size:14.5px; color:var(--fg-dim); line-height:1.5; }
+.ctable thead th{
+  font-family:var(--font-mono); font-size:12px; letter-spacing:1.2px; text-transform:uppercase;
+  color:var(--fg-faint); border-bottom:1px solid var(--border-strong);
+}
+.ctable td.tool{ font-family:var(--font-mono); color:var(--fg); font-weight:600; white-space:nowrap; font-size:14px; }
+.ctable td.diff{ color:var(--fg); }
+.ctable tbody tr:last-child td{ border-bottom:none; }
+
+.aside{
+  border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:8px;
+  padding:16px 20px; background:var(--accent-soft); font-size:14.5px; color:var(--fg-dim); line-height:1.55; margin-top:22px;
+}
+.aside b{ color:var(--fg); }
+
+/* ============================= INSTALL ============================= */
+.install-grid{ display:grid; grid-template-columns:1.1fr 0.9fr; gap:32px; align-items:start; }
+@media (max-width:860px){ .install-grid{ grid-template-columns:1fr; } }
+.install-notes{ display:flex; flex-direction:column; gap:18px; }
+.install-notes .step{ display:flex; gap:14px; }
+.install-notes .num{ font-family:var(--font-mono); color:var(--accent); font-weight:700; font-size:14px; flex:none; padding-top:2px; }
+.install-notes .txt h4{ margin:0 0 4px; font-size:15px; color:var(--fg); }
+.install-notes .txt p{ margin:0; font-size:14px; color:var(--fg-dim); line-height:1.5; }
+
+/* ============================= CTA BAND ============================= */
+.cta-band{
+  border:1px solid var(--border-strong); border-radius:16px; padding:clamp(32px,5vw,56px);
+  background:linear-gradient(160deg, var(--panel) 0%, var(--panel-2) 100%);
+  display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:28px;
+  position:relative; overflow:hidden;
+}
+.cta-band::after{
+  content:""; position:absolute; right:-60px; top:-60px; width:260px; height:260px; border-radius:50%;
+  background:radial-gradient(circle, rgba(var(--accent-rgb),0.14), transparent 70%); pointer-events:none;
+}
+.cta-band h2{ margin:0 0 8px; font-size:clamp(24px,3vw,32px); font-weight:750; color:var(--fg); max-width:480px; }
+.cta-band p{ margin:0; color:var(--fg-dim); font-size:15px; max-width:440px; }
+.cta-band .ctas{ display:flex; gap:14px; flex-wrap:wrap; }
+
+/* ============================= FOOTER ============================= */
+.sitefooter{ border-top:1px solid var(--border); padding:36px 0 44px; }
+.sitefooter .wrap{ display:flex; flex-direction:column; gap:10px; }
+.sitefooter .credit{ font-family:var(--font-mono); font-size:13px; color:var(--fg-faint); letter-spacing:0.2px; line-height:1.7; }
+.sitefooter .credit b{ color:var(--fg-dim); font-weight:600; }
+.sitefooter .credit .tag{ color:var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 100 100" role="img" aria-label="GlobWarden mark">
+        <polygon points="92,50 71,86 29,86 8,50 29,14 71,14" fill="none" stroke="#f2a53c" stroke-width="7"/>
+        <g stroke="#f2a53c" stroke-width="7" stroke-linecap="round">
+          <line x1="26" y1="50" x2="74" y2="50"/>
+          <line x1="38" y1="29" x2="62" y2="71"/>
+          <line x1="62" y1="29" x2="38" y2="71"/>
+        </g>
+      </svg>
+      <span class="word">Glob<b>Warden</b></span>
+    </a>
+    <nav class="topnav">
+      <a class="navlink" href="#pipeline">Pipeline</a>
+      <a class="navlink" href="#demo">Demo</a>
+      <a class="navlink" href="#different">Why it's different</a>
+      <a class="navlink" href="#install">Install</a>
+      <a class="btn btn-primary" href="https://github.com/bobby-tablez/GlobWarden" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============================= HERO ============================= -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-mark">
+        <svg viewBox="0 0 100 100" role="img" aria-hidden="true">
+          <polygon points="92,50 71,86 29,86 8,50 29,14 71,14" fill="none" stroke="#f2a53c" stroke-width="6"/>
+          <g stroke="#f2a53c" stroke-width="6" stroke-linecap="round">
+            <line x1="26" y1="50" x2="74" y2="50"/>
+            <line x1="38" y1="29" x2="62" y2="71"/>
+            <line x1="62" y1="29" x2="38" y2="71"/>
+          </g>
+        </svg>
+        <span class="wordmark">Glob<b>Warden</b></span>
+      </div>
+
+      <div class="eyebrow cyan">MITRE ATT&amp;CK T1027.010 · detection tooling</div>
+      <h1>Feed it a report. It hands you the <span class="accent">detection content</span> — in five languages, in seconds.</h1>
+      <p class="lede">GlobWarden is a CLI that reads a threat-intel report — a URL, a PDF, raw text, a code file, or an image — and uses an LLM to identify command-obfuscation techniques described in it. For each one it finds, it generates ready-to-use detection rules in regex, KQL, SPL, YARA-L, and Sigma, in one pass.</p>
+
+      <div class="hero-ctas">
+        <a class="btn btn-primary" href="#install">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 1v10M4 7l4 4 4-4M2 14h12"/></svg>
+          Get started
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/bobby-tablez/GlobWarden" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          View source
+        </a>
+      </div>
+
+      <div class="statstrip">
+        <div class="stat"><div class="num tabnum">5</div><div class="lbl">input formats</div></div>
+        <div class="stat"><div class="num tabnum">5</div><div class="lbl">AI providers &middot; 2 local</div></div>
+        <div class="stat"><div class="num tabnum">5</div><div class="lbl">rule languages, one pass</div></div>
+      </div>
+
+      <blockquote class="origin">
+        <p>STEEP#MAVERICK's wildcard <code class="mono">Get-Alias</code>/<code class="mono">Get-Command</code> pattern had no name in ATT&amp;CK until T1027.010 was written — and that gap only closed because someone had to manually read the campaign write-up and translate "here's the pattern" into "here's how you'd actually detect it." GlobWarden automates that translation step.</p>
+        <cite>— why this tool exists</cite>
+      </blockquote>
+    </div>
+  </section>
+
+  <!-- ============================= PIPELINE ============================= -->
+  <section class="section" id="pipeline">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">The pipeline</div>
+        <h2 class="h2">One report in. Five validated rule sets out.</h2>
+        <p class="section-lede">Every input format funnels through the same analysis step, and every finding fans out to the same five outputs — nothing is checked in without passing a syntax gate first.</p>
+      </div>
+
+      <div class="diagram-frame">
+        <svg viewBox="0 0 400 610" role="img" aria-label="Flow diagram: five input formats (URL, PDF, text, code, image) converge into AI analysis, which runs on either a cloud provider (OpenAI, Anthropic, Gemini) or a local provider (Ollama, LM Studio); results become obfuscation findings mapped to T1027.010, which pass through a validation gate, then fan out into five rule languages — regex, KQL, SPL, YARA-L, and Sigma.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--fg-faint)"/>
+            </marker>
+          </defs>
+
+          <!-- row: 5 inputs -->
+          <g font-family="var(--font-mono)">
+            <!-- URL -->
+            <g>
+              <rect x="20" y="24" width="64" height="40" rx="8" fill="var(--bg-alt)" stroke="var(--border-strong)"/>
+              <path d="M42 42 a5 5 0 0 1 7 -7 l3 -3 a7 7 0 0 1 10 10 l-3 3" fill="none" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <path d="M52 51 a5 5 0 0 1 -7 7 l-3 3 a7 7 0 0 1 -10 -10 l3 -3" fill="none" stroke="var(--fg-dim)" stroke-width="1.6" transform="translate(-1,-6)"/>
+              <text x="52" y="60" text-anchor="middle" font-size="9.5" letter-spacing="0.5" fill="var(--fg-dim)">URL</text>
+            </g>
+            <!-- PDF -->
+            <g transform="translate(74,0)">
+              <rect x="20" y="24" width="64" height="40" rx="8" fill="var(--bg-alt)" stroke="var(--border-strong)"/>
+              <path d="M42 32 h14 l6 6 v14 h-20 z" fill="none" stroke="var(--fg-dim)" stroke-width="1.6" stroke-linejoin="round"/>
+              <path d="M56 32 v6 h6" fill="none" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <text x="52" y="60" text-anchor="middle" font-size="9.5" letter-spacing="0.5" fill="var(--fg-dim)">PDF</text>
+            </g>
+            <!-- TEXT -->
+            <g transform="translate(148,0)">
+              <rect x="20" y="24" width="64" height="40" rx="8" fill="var(--bg-alt)" stroke="var(--border-strong)"/>
+              <line x1="41" y1="34" x2="63" y2="34" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <line x1="41" y1="40" x2="63" y2="40" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <line x1="41" y1="46" x2="55" y2="46" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <text x="52" y="60" text-anchor="middle" font-size="9.5" letter-spacing="0.5" fill="var(--fg-dim)">TEXT</text>
+            </g>
+            <!-- CODE -->
+            <g transform="translate(222,0)">
+              <rect x="20" y="24" width="64" height="40" rx="8" fill="var(--bg-alt)" stroke="var(--border-strong)"/>
+              <text x="52" y="46" text-anchor="middle" font-size="13" fill="var(--fg-dim)">&lt;/&gt;</text>
+              <text x="52" y="60" text-anchor="middle" font-size="9.5" letter-spacing="0.5" fill="var(--fg-dim)">CODE</text>
+            </g>
+            <!-- IMAGE -->
+            <g transform="translate(296,0)">
+              <rect x="20" y="24" width="64" height="40" rx="8" fill="var(--bg-alt)" stroke="var(--border-strong)"/>
+              <rect x="40" y="33" width="24" height="16" rx="2" fill="none" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <circle cx="45.5" cy="38" r="1.7" fill="var(--fg-dim)"/>
+              <polyline points="40,48 48,41 53,45 64,36" fill="none" stroke="var(--fg-dim)" stroke-width="1.6"/>
+              <text x="52" y="60" text-anchor="middle" font-size="9.5" letter-spacing="0.5" fill="var(--fg-dim)">IMAGE</text>
+            </g>
+          </g>
+
+          <!-- converge lines into AI node -->
+          <g stroke="var(--border-strong)" stroke-width="1.3" fill="none">
+            <line x1="52" y1="64" x2="200" y2="94"/>
+            <line x1="126" y1="64" x2="200" y2="94"/>
+            <line x1="200" y1="64" x2="200" y2="94"/>
+            <line x1="274" y1="64" x2="200" y2="94"/>
+            <line x1="348" y1="64" x2="200" y2="94"/>
+          </g>
+          <line x1="200" y1="94" x2="200" y2="108" stroke="var(--fg-faint)" stroke-width="1.6" marker-end="url(#arrow)"/>
+          <text x="207" y="86" font-family="var(--font-mono)" font-size="9" fill="var(--fg-faint)">ingests</text>
+
+          <!-- AI ANALYSIS node -->
+          <rect x="90" y="110" width="220" height="56" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+          <text x="200" y="134" text-anchor="middle" font-family="var(--font-mono)" font-weight="700" font-size="14" letter-spacing="0.5" fill="var(--accent)">AI ANALYSIS</text>
+          <text x="200" y="152" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--fg-dim)">provider-agnostic · vision-capable</text>
+
+          <!-- branch to CLOUD / LOCAL -->
+          <g stroke="var(--border-strong)" stroke-width="1.3" fill="none">
+            <line x1="160" y1="166" x2="115" y2="186"/>
+            <line x1="240" y1="166" x2="285" y2="186"/>
+          </g>
+
+          <!-- CLOUD box -->
+          <rect x="40" y="186" width="150" height="116" rx="10" fill="var(--bg-alt)" stroke="var(--border-strong)"/>
+          <text x="115" y="206" text-anchor="middle" font-family="var(--font-mono)" font-size="10.5" letter-spacing="1.5" fill="var(--fg-dim)">CLOUD</text>
+          <text x="115" y="230" text-anchor="middle" font-family="var(--font-mono)" font-size="11.5" fill="var(--fg)">OpenAI</text>
+          <text x="115" y="250" text-anchor="middle" font-family="var(--font-mono)" font-size="11.5" fill="var(--fg)">Anthropic</text>
+          <text x="115" y="270" text-anchor="middle" font-family="var(--font-mono)" font-size="11.5" fill="var(--fg)">Gemini</text>
+          <text x="115" y="292" text-anchor="middle" font-family="var(--font-mono)" font-size="8.5" fill="var(--fg-faint)">API key required</text>
+
+          <!-- LOCAL box -->
+          <rect x="210" y="186" width="150" height="116" rx="10" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="1.2"/>
+          <text x="285" y="206" text-anchor="middle" font-family="var(--font-mono)" font-size="10.5" letter-spacing="1.5" fill="var(--ok)">LOCAL · OFFLINE</text>
+          <text x="285" y="230" text-anchor="middle" font-family="var(--font-mono)" font-size="11.5" fill="var(--fg)">Ollama</text>
+          <text x="285" y="250" text-anchor="middle" font-family="var(--font-mono)" font-size="11.5" fill="var(--fg)">LM Studio</text>
+          <text x="285" y="272" text-anchor="middle" font-family="var(--font-mono)" font-size="8.5" fill="var(--fg-faint)">report never</text>
+          <text x="285" y="284" text-anchor="middle" font-family="var(--font-mono)" font-size="8.5" fill="var(--fg-faint)">leaves the host</text>
+
+          <!-- converge back down to findings -->
+          <g stroke="var(--border-strong)" stroke-width="1.3" fill="none">
+            <line x1="115" y1="302" x2="200" y2="326"/>
+            <line x1="285" y1="302" x2="200" y2="326"/>
+          </g>
+          <line x1="200" y1="326" x2="200" y2="340" stroke="var(--fg-faint)" stroke-width="1.6" marker-end="url(#arrow)"/>
+          <text x="207" y="320" font-family="var(--font-mono)" font-size="9" fill="var(--fg-faint)">detects</text>
+
+          <!-- FINDINGS node -->
+          <rect x="90" y="342" width="220" height="56" rx="10" fill="var(--accent-2-soft)" stroke="var(--accent-2)" stroke-width="1.4"/>
+          <text x="200" y="366" text-anchor="middle" font-family="var(--font-mono)" font-weight="700" font-size="13" letter-spacing="0.3" fill="var(--accent-2)">OBFUSCATION FINDINGS</text>
+          <text x="200" y="384" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--fg-dim)">mapped to T1027.010</text>
+
+          <!-- to gate -->
+          <line x1="200" y1="398" x2="200" y2="420" stroke="var(--fg-faint)" stroke-width="1.6" marker-end="url(#arrow)"/>
+          <text x="207" y="414" font-family="var(--font-mono)" font-size="9" fill="var(--fg-faint)">checks syntax</text>
+
+          <!-- VALIDATION GATE -->
+          <rect x="130" y="422" width="140" height="50" rx="25" fill="var(--panel-2)" stroke="var(--ok)" stroke-width="1.4"/>
+          <text x="200" y="443" text-anchor="middle" font-family="var(--font-mono)" font-weight="700" font-size="12" letter-spacing="0.3" fill="var(--ok)">✓ VALIDATED</text>
+          <text x="200" y="459" text-anchor="middle" font-family="var(--font-mono)" font-size="8.5" fill="var(--fg-faint)">compiled / YAML-parsed</text>
+
+          <!-- fan out -->
+          <line x1="200" y1="472" x2="200" y2="492" stroke="var(--fg-faint)" stroke-width="1.6" marker-end="url(#arrow)"/>
+          <text x="207" y="486" font-family="var(--font-mono)" font-size="9" fill="var(--fg-faint)">generates</text>
+          <g stroke="var(--border-strong)" stroke-width="1.3" fill="none">
+            <line x1="200" y1="492" x2="52" y2="522"/>
+            <line x1="200" y1="492" x2="126" y2="522"/>
+            <line x1="200" y1="492" x2="200" y2="522"/>
+            <line x1="200" y1="492" x2="274" y2="522"/>
+            <line x1="200" y1="492" x2="348" y2="522"/>
+          </g>
+
+          <!-- row: 5 outputs -->
+          <g font-family="var(--font-mono)">
+            <rect x="20" y="522" width="64" height="42" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2"/>
+            <text x="52" y="548" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="0.3" fill="var(--accent)">REGEX</text>
+            <rect x="94" y="522" width="64" height="42" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2"/>
+            <text x="126" y="548" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="0.3" fill="var(--accent)">KQL</text>
+            <rect x="168" y="522" width="64" height="42" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2"/>
+            <text x="200" y="548" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="0.3" fill="var(--accent)">SPL</text>
+            <rect x="242" y="522" width="64" height="42" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2"/>
+            <text x="274" y="548" text-anchor="middle" font-size="10.5" font-weight="700" letter-spacing="0.2" fill="var(--accent)">YARA-L</text>
+            <rect x="316" y="522" width="64" height="42" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.2"/>
+            <text x="348" y="548" text-anchor="middle" font-size="10.5" font-weight="700" letter-spacing="0.2" fill="var(--accent)">SIGMA</text>
+          </g>
+
+          <text x="200" y="590" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--fg-faint)">five formats, one finding, cross-referenced by finding ID</text>
+        </svg>
+      </div>
+      <p class="pipe-caption">Cloud providers (OpenAI, Anthropic, Gemini) and local providers (Ollama, LM Studio) sit behind the same interface — swapping one for the other is a flag, not a rewrite.</p>
+    </div>
+  </section>
+
+  <!-- ============================= TERMINAL DEMO ============================= -->
+  <section class="section" id="demo" style="background:var(--bg-alt);">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">See it run</div>
+        <h2 class="h2">A wildcard alias trick, from report to rule.</h2>
+        <p class="section-lede">The same <code class="mono">Get-Alias</code> wildcard pattern from STEEP#MAVERICK, run through GlobWarden with three rule languages requested. <em>Illustrative output</em> — content is real, styling is hand-laid-out for this page rather than a raw terminal capture; see the <a href="https://github.com/bobby-tablez/GlobWarden#see-it-run" style="color:var(--accent-2);">README</a> for a byte-for-byte reproducible <code class="mono">--provider fake</code> capture you can run yourself right now.</p>
+      </div>
+
+      <div class="term">
+        <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">tim@detections-ai ~ globwarden</span></div>
+        <pre class="body"><span class="t-prompt">$</span> <span class="t-cmd">globwarden scan \
+    https://example.com/campaign-report \
+    --rules regex,sigma,kql</span>
+
+<span class="t-dim">GlobWarden v0.1.0 · anthropic (claude-sonnet)</span>
+<span class="t-dim">Fetching report ......................... </span><span class="t-ok">done</span><span class="t-dim"> (1 page, 4.2s)</span>
+<span class="t-dim">Scanning for T1027.010 obfuscation ...... </span><span class="t-ok">done</span><span class="t-dim"> (1 finding)</span>
+
+<span class="t-accent">┌─ Finding f1 ─────────────────────────────────────────────────┐</span>
+<span class="t-accent">│</span> <span class="t-fg">Wildcard Get-Alias → Invoke-Expression</span>
+<span class="t-accent">│</span> <span class="t-dim">category   </span><span class="t-accent">wildcard_resolution</span>
+<span class="t-accent">│</span> <span class="t-dim">confidence </span><span class="t-fg">0.91</span>
+<span class="t-accent">│</span> <span class="t-dim">att&amp;ck     </span><span class="t-cyan">T1027.010</span><span class="t-dim"> (parent: T1027)</span>
+<span class="t-accent">│</span> <span class="t-dim">example    </span><span class="t-fg">.(gal ?e[?x])((gal ?rm) 'hxxp[://]cdn-sync-relay[.]test/lib/mod2.ps1')</span>
+<span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
+
+<span class="t-dim">Generating rules: regex, sigma, kql ..... </span><span class="t-ok">done</span>
+<span class="t-dim">Validating ............................. </span><span class="t-ok">3/3 valid</span><span class="t-dim"> (regex compiled · sigma YAML parsed · kql syntax OK)</span>
+
+<span class="t-accent">┌─ regex ─ f1 ─ valid ──────────────────────────────────────────┐</span>
+<span class="t-accent">│</span> <span class="t-fg">\(\s*gal\s+\??[a-z]*\[?\??x\]?\s*\)\s*\(\s*\(\s*gal\s+\??rm\s*\)</span>
+<span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
+<span class="t-dim">  matches the wildcard-alias call-and-resolve pair regardless of</span>
+<span class="t-dim">  which unambiguous prefix was typed for iex / irm</span>
+
+<span class="t-accent">┌─ sigma ─ f1 ─ valid ──────────────────────────────────────────┐</span>
+<span class="t-fg">selection_alias_lookup:</span>
+<span class="t-fg">  ScriptBlockText|contains:</span>
+<span class="t-fg">    - 'gal ' - 'gcm ' - '(gal ' - '(gcm '</span>
+<span class="t-fg">selection_exec_target:</span>
+<span class="t-fg">  ScriptBlockText|contains:</span>
+<span class="t-fg">    - '</span><span class="t-accent">\?e[\?x]</span><span class="t-fg">' - '</span><span class="t-accent">\?rm</span><span class="t-fg">'</span>
+<span class="t-fg">condition: selection_alias_lookup </span><span class="t-accent">and</span><span class="t-fg"> selection_exec_target</span>
+<span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
+
+<span class="t-accent">┌─ kql ─ f1 ─ valid ─────────────────────────────────────────────┐</span>
+<span class="t-fg">DeviceProcessEvents</span>
+<span class="t-fg">| where ProcessCommandLine has_any ('gal ', 'gcm ')</span>
+<span class="t-fg">| where ProcessCommandLine matches regex </span><span class="t-dim">@"\(\?e\[?\?x\]?\)"</span>
+<span class="t-accent">└─────────────────────────────────────────────────────────────┘</span>
+
+<span class="t-dim">1 finding → 3 rules generated · 0 invalid · done in 8.7s</span>
+<span class="t-prompt">$</span> <span class="cursor"></span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= FEATURES ============================= -->
+  <section class="section" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">What it actually does</div>
+        <h2 class="h2">Built around the four things that matter for this job.</h2>
+      </div>
+
+      <div class="features-grid">
+        <div class="card">
+          <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="6" width="12" height="22" rx="2"/><rect x="19" y="6" width="12" height="22" rx="2"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="25" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
+          <h3>Cloud or fully local</h3>
+          <p>OpenAI, Anthropic, and Gemini for cloud analysis; Ollama and LM Studio for local, offline models. Both local providers speak the same OpenAI-compatible wire format, so a report never has to leave the machine for orgs that can't send threat intel to a cloud API — that's a real requirement this tool treats as a first-class path, not a fallback.</p>
+        </div>
+        <div class="card">
+          <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="9" cy="17" r="4"/><line x1="13" y1="17" x2="21" y2="8"/><line x1="13" y1="17" x2="21" y2="14"/><line x1="13" y1="17" x2="21" y2="20"/><line x1="13" y1="17" x2="21" y2="26"/><circle cx="24" cy="8" r="2.2" fill="currentColor" stroke="none"/><circle cx="24" cy="14" r="2.2" fill="currentColor" stroke="none"/><circle cx="24" cy="20" r="2.2" fill="currentColor" stroke="none"/><circle cx="24" cy="26" r="2.2" fill="currentColor" stroke="none"/></svg>
+          <h3>One pass, five rule languages</h3>
+          <p>regex, KQL, SPL, YARA-L, and Sigma are generated together from the same findings, cross-referenced by finding ID — a regex hit and a Sigma rule for the same technique trace back to the same evidence. This fan-out, not any single translation, is the core differentiator.</p>
+        </div>
+        <div class="card">
+          <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M17 3 L29 8 v9 c0 8-5 12-12 14-7-2-12-6-12-14 V8 Z"/><path d="M11 17 l4 4 8-9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <h3>Validated before you see it</h3>
+          <p>Every generated rule is checked before it's shown: regex is actually compiled, Sigma is actually YAML-parsed. A rule that fails validation is marked invalid with the reason attached — never silently dropped, never silently trusted.</p>
+        </div>
+        <div class="card">
+          <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="4" width="26" height="26" rx="4"/><path d="M11 12 h12 M11 17 h8 M11 22 h5" stroke-linecap="round"/></svg>
+          <h3>Obfuscation-specific, not IOC soup</h3>
+          <p>Narrow by design: character masking, wildcard/glob resolution, string concatenation, environment-variable indirection, and encoded download cradles — the T1027.010 taxonomy specifically, not another general-purpose IOC/TTP extractor.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= HOW IT'S DIFFERENT ============================= -->
+  <section class="section" id="different" style="background:var(--bg-alt);">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Prior art, honestly</div>
+        <h2 class="h2">How it's different — and where it isn't.</h2>
+        <p class="section-lede">Narrow input, broad output, works fully offline with a local model. That's the real niche — this isn't a replacement for analyst review or a certified rule-translation engine.</p>
+      </div>
+
+      <div class="tbl-wrap">
+        <table class="ctable">
+          <thead>
+            <tr><th>Tool</th><th>What it does</th><th>How GlobWarden differs</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="tool">DIANA</td>
+              <td>Report/URL/doc text → detection logic via LLM (OpenAI, Anthropic, Groq). The closest analog to GlobWarden.</td>
+              <td class="diff">Fans out to five rule languages in one pass instead of one; obfuscation-technique-focused rather than general IOC/TTP extraction; adds first-class local-LLM support; PDF/code-file-first rather than URL/text-first.</td>
+            </tr>
+            <tr>
+              <td class="tool">Uncoder AI<br/><span style="font-weight:400;color:var(--fg-faint);">(SOC Prime)</span></td>
+              <td>The dominant rule-translation tool — Sigma/Roota into 48+ SIEM languages. It translates a rule you already have.</td>
+              <td class="diff">GlobWarden does the step before that: reading a report that has no rule yet and producing the first draft. Complementary, not competing.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="aside">
+        <b>Also worth knowing:</b> LLMCloudHunter and SigmaGen are academic pipelines that proved report-to-Sigma works, but neither is a maintained OSS CLI and both target one output format. Revoke-Obfuscation, PSDecode, and CyberChef solve the adjacent problem — deobfuscating a sample you already have in hand — not extracting techniques described in a report you're reading. And a companion project in this talk's kit, <code class="mono">t1027010_hunter.py</code>, runs the opposite direction of GlobWarden: it statically analyzes PowerShell scripts you already have, rather than reading prose about a technique to produce new detection content.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= INSTALL ============================= -->
+  <section class="section" id="install">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Install / quickstart</div>
+        <h2 class="h2">Up and running in about a minute.</h2>
+      </div>
+
+      <div class="install-grid">
+        <div class="term">
+          <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">quickstart</span></div>
+          <pre class="body"><span class="t-prompt">$</span> <span class="t-cmd">pip install globwarden</span>
+
+<span class="t-dim"># scan a report URL, request three rule types</span>
+<span class="t-prompt">$</span> <span class="t-cmd">globwarden scan \
+    https://example.com/campaign-report \
+    --rules regex,sigma,kql</span>
+
+<span class="t-dim"># scan a local PDF with a fully local model, all five rule types (default)</span>
+<span class="t-prompt">$</span> <span class="t-cmd">globwarden scan ./incident-notes.pdf \
+    --provider ollama</span>
+
+<span class="t-dim"># check which providers are configured and reachable</span>
+<span class="t-prompt">$</span> <span class="t-cmd">globwarden providers</span></pre>
+        </div>
+
+        <div class="install-notes">
+          <div class="step">
+            <div class="num">01</div>
+            <div class="txt"><h4>Install from PyPI</h4><p>Single package, no separate binary — <code class="mono">pip install globwarden</code> pulls in the CLI and all five provider clients.</p></div>
+          </div>
+          <div class="step">
+            <div class="num">02</div>
+            <div class="txt"><h4>Point it at a provider</h4><p>Set an API key for a cloud provider, or point <code class="mono">--provider</code> at a running Ollama or LM Studio instance — no key needed for local.</p></div>
+          </div>
+          <div class="step">
+            <div class="num">03</div>
+            <div class="txt"><h4>Scan anything</h4><p>A report URL, a downloaded PDF, a pasted snippet, a script file, or a screenshot of a campaign write-up all go through <code class="mono">globwarden scan</code>.</p></div>
+          </div>
+          <div class="step">
+            <div class="num">04</div>
+            <div class="txt"><h4>Review before you ship</h4><p>Treat the output as a detection-engineering assistant's first draft, not a certified translation — validated rules still need an analyst's read.</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= CTA ============================= -->
+  <section class="section" id="get-it" style="padding-top:0;">
+    <div class="wrap">
+      <div class="cta-band">
+        <div>
+          <h2>GlobWarden is open source.</h2>
+          <p>Read the code, file an issue, add a sixth provider in about five lines. Contributions welcome, especially more rule-language backends.</p>
+        </div>
+        <div class="ctas">
+          <a class="btn btn-primary" href="https://github.com/bobby-tablez/GlobWarden" rel="noopener">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+            View on GitHub
+          </a>
+          <a class="btn btn-ghost" href="#install">Read the quickstart</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="sitefooter">
+  <div class="wrap">
+    <div class="credit">
+      Built out of <span class="tag">"An Obfuscated Tale — From ATT&amp;CK Origin to Detection Today"</span> · MITRE ATT&amp;CK <b>T1027.010</b> · Command Obfuscation<br/>
+      T1027.010 research credit: G. Thomas · Tim Peck · TruKno
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

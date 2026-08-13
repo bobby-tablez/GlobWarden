@@ -1,0 +1,120 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "globwarden"
+version = "0.1.0"
+description = "Feed it a threat-intel report; it hands back regex, KQL, SPL, YARA-L, and Sigma detection content for command obfuscation techniques (MITRE ATT&CK T1027.010)."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "Tim Peck", email = "tim@detections.ai" },
+]
+keywords = [
+    "security",
+    "detection-engineering",
+    "mitre-attack",
+    "t1027.010",
+    "sigma",
+    "yara-l",
+    "kql",
+    "spl",
+    "threat-intel",
+    "llm",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
+
+# Base install is deliberately complete for the *LLM layer* — all five providers
+# (OpenAI, Anthropic, Gemini, Ollama, LM Studio) talk plain REST/HTTP, so `requests`
+# alone covers every one of them; no provider-specific SDK is required. It also
+# covers raw text/code ingestion (globwarden/ingest/text.py has no third-party
+# dependency). What's genuinely optional is the heavier document-parsing stack for
+# PDF/URL/image ingestion specifically — split out below (`pdf`/`web`/`image`
+# extras) so `pip install globwarden` stays light for anyone who only ever feeds it
+# raw text or code snippets. Every ingestion module that needs one of these optional
+# packages must lazily import it and raise a clear, extra-naming error if it's
+# missing (see globwarden/ingest/pdf.py, url.py) — never a hard module-level import,
+# since that would break `globwarden.ingest`'s import for every source type the
+# moment any one optional dependency is absent.
+dependencies = [
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# PDF report ingestion (globwarden/ingest/pdf.py)
+pdf = [
+    "pdfplumber>=0.11",
+]
+# URL / web-page ingestion and boilerplate-stripped text extraction
+# (globwarden/ingest/url.py)
+web = [
+    "trafilatura>=1.12",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+]
+# Image/screenshot ingestion for vision-capable providers (globwarden/ingest/image.py)
+image = [
+    "Pillow>=10.3",
+]
+# Everything ingestion needs, in one shot.
+all = [
+    "globwarden[pdf,web,image]",
+]
+# Contributor tooling: tests, mocked-HTTP fixtures, linting.
+# reportlab is test-only (tests/ingest builds synthetic PDF fixtures with it
+# at test time) — not a runtime dependency of globwarden itself.
+dev = [
+    "globwarden[all]",
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "responses>=0.25",
+    "ruff>=0.6",
+    "reportlab>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/bobby-tablez/GlobWarden"
+Repository = "https://github.com/bobby-tablez/GlobWarden"
+Issues = "https://github.com/bobby-tablez/GlobWarden/issues"
+Documentation = "https://github.com/bobby-tablez/GlobWarden/tree/main/docs"
+
+# Confirmed against the real globwarden/cli.py (`app = typer.Typer(...)`).
+[project.scripts]
+globwarden = "globwarden.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["globwarden"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 130  # kept generous rather than 100 because several LLM prompt-template
+                   # strings in globwarden/engine/prompts.py are long by nature of the
+                   # content itself (rule syntax, JSON schema examples) — better to allow
+                   # that than to wrap carefully-worded prompt text awkwardly.
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

@@ -1,0 +1,73 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GlobWarden — feed it a report, get detection content back">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0e14"/>
+      <stop offset="100%" stop-color="#0d1420"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f2a53c"/>
+      <stop offset="100%" stop-color="#d98a26"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#f2a53c" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#f2a53c" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#1c2733" stroke-width="1"/>
+    </pattern>
+    <mask id="fade-grid">
+      <rect width="1200" height="300" fill="url(#fadeGrad)"/>
+    </mask>
+    <linearGradient id="fadeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.15"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1200" height="300" fill="url(#bg)"/>
+  <rect width="1200" height="300" fill="url(#grid)" mask="url(#fade-grid)"/>
+  <rect width="1200" height="300" fill="url(#glow)"/>
+
+  <!-- outer terminal-style border -->
+  <rect x="10" y="10" width="1180" height="280" rx="14" fill="none" stroke="#22303c" stroke-width="1.5"/>
+
+  <!-- title bar dots, like a terminal window -->
+  <circle cx="40" cy="38" r="6" fill="#ff5f56"/>
+  <circle cx="62" cy="38" r="6" fill="#ffbd2e"/>
+  <circle cx="84" cy="38" r="6" fill="#27c93f"/>
+  <text x="600" y="43" text-anchor="middle" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="13" fill="#5b6b7a">globwarden — scan --provider any</text>
+  <line x1="10" y1="58" x2="1190" y2="58" stroke="#1c2733" stroke-width="1.5"/>
+
+  <!-- glyph motif: wildcard / ward hybrid -->
+  <g transform="translate(148,175)" filter="url(#softGlow)">
+    <circle cx="0" cy="0" r="58" fill="none" stroke="#d98a26" stroke-width="1.5" stroke-opacity="0.35"/>
+    <path d="M0,-40 L34.6,-20 L34.6,20 L0,40 L-34.6,20 L-34.6,-20 Z"
+          fill="#0d1420" stroke="url(#accent)" stroke-width="3" stroke-linejoin="round"/>
+    <!-- wildcard asterisk glyph centered inside the ward shield -->
+    <g stroke="url(#accent)" stroke-width="4.5" stroke-linecap="round">
+      <line x1="0" y1="-20" x2="0" y2="20"/>
+      <line x1="-17.3" y1="-10" x2="17.3" y2="10"/>
+      <line x1="17.3" y1="-10" x2="-17.3" y2="10"/>
+    </g>
+    <circle cx="0" cy="0" r="4.5" fill="#f2a53c"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="240" y="168" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-weight="700" font-size="64" fill="#eef3f7" letter-spacing="1">Glob<tspan fill="url(#accent)">Warden</tspan></text>
+
+  <!-- tagline -->
+  <text x="242" y="205" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="19" fill="#8fa3b3">One obfuscated pattern in, five ready-to-use detection rules out.</text>
+
+  <!-- bottom meta row, terminal-prompt styled -->
+  <text x="242" y="240" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="15" fill="#f2a53c">$</text>
+  <text x="258" y="240" font-family="'SF Mono', 'Fira Code', Consolas, Menlo, monospace" font-size="15" fill="#5b6b7a">regex · KQL · SPL · YARA-L · Sigma&#160;&#160;|&#160;&#160;cloud + local LLMs&#160;&#160;|&#160;&#160;<tspan fill="#62d2e8">MITRE ATT&amp;CK T1027.010</tspan></text>
+
+</svg>
