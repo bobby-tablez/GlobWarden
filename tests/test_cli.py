@@ -19,6 +19,7 @@ import json
 import sys
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from globwarden import __version__
@@ -62,23 +63,32 @@ def test_help_lists_commands_and_exits_zero():
     assert "providers" in result.stdout
 
 
-def test_scan_help_documents_all_required_options():
-    # See the wide-COLUMNS comment on test_help_lists_commands_and_exits_zero
-    # above -- this is the test that actually caught the truncation bug in CI.
+def test_scan_help_documents_all_real_cli_options():
+    """Every real `--flag` `scan()` defines must actually show up in its own
+    `--help` text. Derives the expected flags from the live Typer/Click
+    command object -- the same source of truth the CLI itself runs from --
+    instead of a hand-maintained list of flag names, which is exactly the
+    kind of thing that goes stale the moment a new option gets added without
+    also remembering to update a second, disconnected list. (This happened
+    for real: `--output-file` shipped without this test's old hardcoded
+    checklist being updated to include it, so the gap it exists to catch
+    went uncaught.) Reading the expectation from the command definition
+    itself means this test can't drift out of sync with reality the same way
+    again -- add an option to `scan()` and this test covers it automatically.
+
+    See the wide-COLUMNS comment on test_help_lists_commands_and_exits_zero
+    above -- narrow terminal-width truncation is the other way this class of
+    test has broken for real in CI before.
+    """
+    click_app = typer.main.get_command(cli_module.app)
+    scan_cmd = click_app.commands["scan"]
+    real_flags = [opt for param in scan_cmd.params for opt in param.opts if opt.startswith("-")]
+    assert len(real_flags) >= 10, f"sanity check failed -- only found {real_flags!r}, expected scan()'s real options"
+
     result = runner.invoke(cli_module.app, ["scan", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
-    for opt in [
-        "--provider",
-        "--model",
-        "--rules",
-        "--output",
-        "--api-key",
-        "--base-url",
-        "--user-agent",
-        "--dry-run",
-        "--verbose",
-    ]:
-        assert opt in result.stdout, opt
+    for flag in real_flags:
+        assert flag in result.stdout, flag
 
 
 def test_no_args_shows_help_not_an_error():
