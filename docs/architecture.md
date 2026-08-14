@@ -168,6 +168,7 @@ globwarden/
 
 ## Where to look next
 
+- [`docs/cli.md`](cli.md) — full command/flag reference.
 - [`docs/providers.md`](providers.md) — setup details for each of the five LLM
   providers, including local server installation.
 - [`globwarden/models.py`](../globwarden/models.py) — the authoritative dataclass

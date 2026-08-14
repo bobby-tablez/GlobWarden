@@ -5,6 +5,9 @@ three cloud APIs and two local inference servers. Pick whichever fits your
 constraints — nothing else in the tool changes based on which one you use, aside from
 vision support (see the table at the end).
 
+This page covers provider-specific setup only. For every CLI flag (`--provider`,
+`--api-key`, `--base-url`, `--output-file`, etc.), see [`cli.md`](cli.md).
+
 Select a provider per run with `--provider`:
 
 ```bash

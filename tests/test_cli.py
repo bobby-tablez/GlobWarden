@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 import typer
@@ -63,6 +64,14 @@ def test_help_lists_commands_and_exits_zero():
     assert "providers" in result.stdout
 
 
+def _real_scan_flags() -> list[str]:
+    click_app = typer.main.get_command(cli_module.app)
+    scan_cmd = click_app.commands["scan"]
+    flags = [opt for param in scan_cmd.params for opt in param.opts if opt.startswith("-")]
+    assert len(flags) >= 10, f"sanity check failed -- only found {flags!r}, expected scan()'s real options"
+    return flags
+
+
 def test_scan_help_documents_all_real_cli_options():
     """Every real `--flag` `scan()` defines must actually show up in its own
     `--help` text. Derives the expected flags from the live Typer/Click
@@ -80,15 +89,33 @@ def test_scan_help_documents_all_real_cli_options():
     above -- narrow terminal-width truncation is the other way this class of
     test has broken for real in CI before.
     """
-    click_app = typer.main.get_command(cli_module.app)
-    scan_cmd = click_app.commands["scan"]
-    real_flags = [opt for param in scan_cmd.params for opt in param.opts if opt.startswith("-")]
-    assert len(real_flags) >= 10, f"sanity check failed -- only found {real_flags!r}, expected scan()'s real options"
-
+    real_flags = _real_scan_flags()
     result = runner.invoke(cli_module.app, ["scan", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     for flag in real_flags:
         assert flag in result.stdout, flag
+
+
+@pytest.mark.parametrize("doc_path", ["README.md", "docs/cli.md"])
+def test_docs_document_all_real_cli_options(doc_path):
+    """Every real `--flag` `scan()` defines must actually be mentioned in
+    both of GlobWarden's own docs of it -- the README's CLI reference table
+    and docs/cli.md's -- for the same reason and the same way as
+    test_scan_help_documents_all_real_cli_options above: flags derived from
+    the live command object, not a hand-maintained list, so adding an option
+    to `scan()` is automatically covered here too instead of relying on
+    someone remembering to update two separate markdown files by hand.
+
+    This only checks presence (every real flag string appears somewhere in
+    the file), not the accuracy of each flag's prose description -- that
+    part still relies on whoever adds an option writing it up honestly, the
+    same as any other documentation.
+    """
+    real_flags = _real_scan_flags()
+    repo_root = Path(__file__).resolve().parent.parent
+    text = (repo_root / doc_path).read_text()
+    for flag in real_flags:
+        assert flag in text, f"{flag} is missing from {doc_path}'s CLI reference"
 
 
 def test_no_args_shows_help_not_an_error():

@@ -218,6 +218,34 @@ globwarden scan ./screenshot.png --provider lmstudio
 Full per-provider setup (API key details, local server install commands) lives in
 [`docs/providers.md`](docs/providers.md).
 
+## CLI reference
+
+`globwarden scan <source>` — `source` is a URL, a local PDF/text/code/image path,
+or the literal `demo` for a built-in, network-free demo source.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--provider` | auto-detect | LLM provider: `openai`, `anthropic`, `gemini`, `ollama`, `lmstudio`, or `fake` (built-in, network-free stub for demos/testing). Omit to auto-detect the first available real provider. |
+| `--model` | provider default | Model name/tag to use with the chosen provider. |
+| `--rules` | `regex,kql,spl,yara-l,sigma` | Comma-separated rule types to generate. |
+| `--output` | `terminal` | How to render results: `terminal` (colorized panels), `json`, or `markdown` (both print clean, scriptable output with no rich styling). |
+| `--output-file <path>` | stdout | Write results to this file instead of stdout, in whichever `--output` format was chosen. `terminal` writes the same colorized panel layout shown on screen as plain text (box-drawing preserved, no ANSI codes) at a fixed, portable width — for a scan too long for terminal scrollback. |
+| `--api-key` | provider's env var | Override the provider's default API key env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.). |
+| `--base-url` | provider default | Override the provider's base URL — mainly for Ollama/LM Studio or a self-hosted OpenAI-compatible endpoint. |
+| `--user-agent` | a standard browser UA | Override the User-Agent sent for URL fetches. Some sites — security/threat-intel blogs especially — block requests that self-identify as a bot. Env var: `GLOBWARDEN_USER_AGENT`. |
+| `--dry-run` | off | Ingest + detect only; skip rule generation. |
+| `-v`, `--verbose`, `--debug` | off | Show full tracebacks and extra pipeline detail on failure. |
+| `--help` | — | Show this message and exit. |
+
+Two other commands: `globwarden --version` (show the installed version and exit)
+and `globwarden providers` (list every known provider and whether each is
+currently available/configured).
+
+This table is checked against the CLI's real `--help` output by the test suite —
+see `tests/test_cli.py::test_scan_help_documents_all_real_cli_options` and
+`test_readme_documents_all_real_cli_options` — so it can't quietly drift out of
+sync the way a hand-maintained list normally would.
+
 ## Features
 
 - **Five input types** — URL, local PDF, raw text, a code/script file, or an image,
@@ -298,6 +326,8 @@ Full setup instructions (env vars, local install/pull commands) are in
 
 ## Docs
 
+- [`docs/cli.md`](docs/cli.md) — full command/flag reference, kept in sync with
+  `--help` and this README by the test suite.
 - [`docs/architecture.md`](docs/architecture.md) — pipeline internals, module map,
   and the design decisions behind them.
 - [`docs/providers.md`](docs/providers.md) — detailed setup for all five LLM
