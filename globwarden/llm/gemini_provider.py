@@ -18,10 +18,19 @@ import requests
 
 from ._imageutil import sniff_image_mime_type
 from .base import LLMProvider, LLMResponse
-from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionError, RateLimitError
+from .errors import (
+    AuthenticationError,
+    ProviderAPIError,
+    ProviderConnectionError,
+    ProviderRefusalError,
+    RateLimitError,
+)
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = "gemini-2.0-flash"
+# finishReason values that mean "declined for policy/safety reasons," not
+# "cut off before finishing" -- see the `if not text:` check below.
+_REFUSAL_FINISH_REASONS = frozenset({"SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"})
 # A content-rich detection report can genuinely take a while to finish
 # generating -- see anthropic_provider.py's equivalent constant/note for the
 # real, confirmed-live incident this margin is sized against. GEMINI_TIMEOUT
@@ -108,6 +117,22 @@ class GeminiProvider(LLMProvider):
             # carry a block reason even when there are zero candidates at all.
             finish_reason = candidates[0].get("finishReason") if candidates else None
             prompt_feedback = data.get("promptFeedback")
+
+            if finish_reason in _REFUSAL_FINISH_REASONS:
+                # A policy/safety decline, not a truncated response -- see
+                # anthropic_provider.py's equivalent check and
+                # ProviderRefusalError's docstring. Content-specific, not
+                # systemic, so callers generating per-item content can treat
+                # this as "no result for this one item" rather than aborting
+                # an entire batch.
+                raise ProviderRefusalError(
+                    "Gemini declined to generate content for this request "
+                    f"(finishReason={finish_reason!r}, promptFeedback={prompt_feedback!r}). "
+                    "This is a policy/safety decision, not a truncated or malformed response.",
+                    status_code=resp.status_code,
+                    body=str(data)[:2000],
+                )
+
             raise ProviderAPIError(
                 "Gemini returned a 200 response with no usable text content "
                 f"(finishReason={finish_reason!r}, promptFeedback={prompt_feedback!r}). "

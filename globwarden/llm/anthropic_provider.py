@@ -29,6 +29,17 @@ default (a reasonable number for the old, tighter max_tokens) started timing
 out on real content-rich reports as a result. Raised in step with the
 max_tokens change, with `ANTHROPIC_TIMEOUT` as the matching env var escape
 hatch.
+
+`thinking` note: claude-opus-5 performs extended thinking by default -- not
+something this provider ever opted into. Confirmed live: on a content-rich
+real-world report, the model spent its *entire* max_tokens budget thinking
+(content block types=['thinking'], stop_reason='max_tokens', zero text
+blocks) and never got to emit the actual JSON answer at all, no matter how
+generous max_tokens was raised, since thinking has no built-in cap of its
+own. GlobWarden always wants a deterministic structured-JSON answer, never a
+reasoning transcript (which isn't parsed or surfaced anywhere), so thinking
+is explicitly disabled on every request -- confirmed live this makes the
+exact same request return real `text` content immediately instead.
 """
 
 from __future__ import annotations
@@ -40,7 +51,13 @@ import requests
 
 from ._imageutil import sniff_image_mime_type
 from .base import LLMProvider, LLMResponse
-from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionError, RateLimitError
+from .errors import (
+    AuthenticationError,
+    ProviderAPIError,
+    ProviderConnectionError,
+    ProviderRefusalError,
+    RateLimitError,
+)
 
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_MODEL = "claude-opus-5"
@@ -114,6 +131,13 @@ class AnthropicProvider(LLMProvider):
             "messages": [
                 {"role": "user", "content": self._build_user_content(user_prompt, images)},
             ],
+            # See module docstring's `thinking` note: some Claude models think
+            # by default, and that thinking has no cap of its own -- it can
+            # (confirmed live) consume the entire max_tokens budget on a
+            # content-rich report and leave nothing for the actual answer.
+            # GlobWarden always wants a deterministic JSON answer, never a
+            # reasoning transcript, so thinking is always turned off.
+            "thinking": {"type": "disabled"},
         }
 
         try:
@@ -157,6 +181,27 @@ class AnthropicProvider(LLMProvider):
             stop_reason = data.get("stop_reason")
             block_types = [block.get("type") for block in content_blocks]
             usage = data.get("usage", {})
+
+            if stop_reason == "refusal":
+                # A distinct case from truncation: the model explicitly
+                # declined to answer this specific request (a policy/safety
+                # refusal), not a response that got cut off. "Raise
+                # max_tokens" is actively wrong advice here -- no amount of
+                # budget fixes a refusal. Content-specific, not systemic (see
+                # ProviderRefusalError docstring): a caller generating
+                # per-item content (e.g. one finding among many) can
+                # typically treat this as "no result for this one item"
+                # rather than aborting an entire batch over it.
+                raise ProviderRefusalError(
+                    "Anthropic declined to generate content for this request "
+                    f"(stop_reason='refusal', usage={usage!r}). This is a policy/safety "
+                    "decision by the model, not a truncated or malformed response -- "
+                    "raising max_tokens will not help. If this keeps happening for the "
+                    "same content, try a different model via --model.",
+                    status_code=resp.status_code,
+                    body=str(data)[:2000],
+                )
+
             raise ProviderAPIError(
                 "Anthropic returned a 200 response with no usable text content "
                 f"(stop_reason={stop_reason!r}, content block types={block_types!r}, "

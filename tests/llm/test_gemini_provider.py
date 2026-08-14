@@ -18,6 +18,7 @@ from globwarden.llm.errors import (
     AuthenticationError,
     ProviderAPIError,
     ProviderConnectionError,
+    ProviderRefusalError,
     RateLimitError,
 )
 from globwarden.llm.gemini_provider import GeminiProvider
@@ -112,6 +113,22 @@ def test_empty_candidates_raises_clear_provider_error_not_silent_empty_text():
     with pytest.raises(ProviderAPIError) as exc_info:
         provider.complete(system_prompt="sys", user_prompt="user")
     assert "no usable text content" in str(exc_info.value)
+
+
+@responses.activate
+def test_safety_finish_reason_raises_distinct_refusal_error():
+    # A policy/safety decline, not a truncated response -- see
+    # anthropic_provider.py's equivalent live-confirmed regression.
+    responses.add(
+        responses.POST,
+        GENERATE_URL,
+        json={"candidates": [{"content": {}, "finishReason": "SAFETY"}]},
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderRefusalError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+    assert "SAFETY" in str(exc_info.value)
 
 
 @responses.activate

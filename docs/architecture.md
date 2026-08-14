@@ -157,6 +157,15 @@ globwarden/
   `validation_note` explaining why — surfaced in the terminal rather than hidden,
   because a detection engineer deciding whether to trust a rule needs to see the
   near-misses too.
+- **A provider refusal is content-specific, not systemic.** A model can decline
+  to answer a specific request (a policy/safety decision — `llm.errors.
+  ProviderRefusalError`), distinct from a truncated or malformed response. Unlike
+  unparseable JSON (a real signal something's systemically wrong, which correctly
+  still fail-fasts the whole `generate_rules()` batch), a refusal on one finding
+  says nothing about any other finding's independent call — confirmed live, other
+  findings kept succeeding normally in the same run. So only the affected
+  finding's requested formats come back `valid=False`; the rest of the scan is
+  unaffected.
 - **Local providers share one HTTP implementation.** Ollama and LM Studio are both
   OpenAI-wire-format servers with different default ports; duplicating
   request-building logic for them would be pure risk with no benefit, hence

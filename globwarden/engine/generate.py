@@ -32,6 +32,14 @@ optional nicety — a `GeneratedRule` with `valid=True` is a real claim the CLI/
 will display, and getting that claim wrong undermines the whole tool's
 credibility as a detection-engineering assistant.
 
+A provider can also explicitly *refuse* to generate content for a specific
+finding (a policy/safety decision, distinct from a truncated or malformed
+response — see `llm.errors.ProviderRefusalError`). Confirmed live: this is
+content-specific, not systemic, so it's handled differently from an
+unparseable-JSON `GenerationError` — instead of aborting the whole scan, only
+the affected finding's requested formats come back `valid=False` with a note
+explaining why; every other finding's independent call is unaffected.
+
 Findings are independent of one another, so their generation calls (including
 any retries) run concurrently via a thread pool — see `DEFAULT_MAX_CONCURRENCY`
 — since every `LLMProvider.complete()` implementation is a blocking, stateless-
@@ -57,6 +65,7 @@ from globwarden.engine.prompts import (
     rule_generation_user_prompt,
 )
 from globwarden.llm.base import LLMProvider
+from globwarden.llm.errors import ProviderRefusalError
 from globwarden.models import GeneratedRule, ObfuscationFinding, RuleType
 
 logger = logging.getLogger(__name__)
@@ -302,11 +311,14 @@ def _finalize_with_retries(
                 finding.id,
                 f"a validation retry ({attempt}/{max_retries}) for {rule_type.value}",
             )
-        except GenerationError:
+        except (GenerationError, ProviderRefusalError):
             # Can't recover further -- stop retrying and report the last
             # known (invalid) attempt rather than raising, since the earlier
             # combined call already succeeded and this format's own failure
-            # is a legitimate, reportable outcome, not a pipeline error.
+            # is a legitimate, reportable outcome, not a pipeline error. A
+            # refusal here is treated the same as unparseable JSON: give up
+            # on fixing *this format*, not the whole finding -- the initial
+            # combined response already has usable content for it.
             break
         content, explanation = _parse_section(retry_parsed, rule_type)
         valid, note = validator(content)
@@ -346,7 +358,24 @@ def _generate_for_finding(
         attack_mapping=finding.attack_mapping,
     )
     context = f"a combined rule-generation response ({', '.join(rt.value for rt in rule_types)})"
-    parsed = _call_and_parse(provider, system_prompt, user_prompt, finding.id, context)
+    try:
+        parsed = _call_and_parse(provider, system_prompt, user_prompt, finding.id, context)
+    except ProviderRefusalError as exc:
+        # Content-specific, not systemic (see ProviderRefusalError's
+        # docstring) -- confirmed live, a refusal on one finding's combined
+        # call has no bearing on any other finding's independent call, so
+        # this must not take down the whole scan's results the way an
+        # unparseable-JSON GenerationError intentionally does (that case
+        # really is a signal something's systemically wrong). Report every
+        # requested format for *this finding* as invalid with a clear note,
+        # exactly like a format that failed validation and exhausted its
+        # retries -- never silently dropped, but scoped to the one finding
+        # that actually had the problem.
+        note = f"Provider declined to generate content for this finding (safety refusal): {exc}"
+        return [
+            GeneratedRule(finding_id=finding.id, rule_type=rt, content="", explanation="", valid=False, validation_note=note)
+            for rt in rule_types
+        ]
 
     rules: list[GeneratedRule] = []
     for rule_type in rule_types:
@@ -381,7 +410,9 @@ def generate_rules(
 
     Raises `GenerationError` only when a provider response cannot be recovered as
     JSON at all; content that parses but fails format-specific validation is
-    reported via `valid=False`, not raised.
+    reported via `valid=False`, not raised. A provider refusal on one finding's
+    initial call is also never raised out of here — see module docstring — it
+    comes back as `valid=False` results for that finding only.
     """
     if not findings or not rule_types:
         return []

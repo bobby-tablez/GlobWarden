@@ -15,6 +15,7 @@ from globwarden.llm.errors import (
     AuthenticationError,
     ProviderAPIError,
     ProviderConnectionError,
+    ProviderRefusalError,
     RateLimitError,
 )
 from globwarden.llm.openai_provider import OpenAIProvider
@@ -233,4 +234,26 @@ def test_empty_content_raises_clear_diagnostic_error_not_silent_empty_text():
     message = str(exc_info.value)
     assert "no usable text content" in message
     assert "length" in message
+    assert exc_info.value.status_code == 200
+
+
+@responses.activate
+def test_content_filter_finish_reason_raises_distinct_refusal_error():
+    # A policy/safety decline, not a truncated response -- see
+    # anthropic_provider.py's equivalent live-confirmed regression.
+    responses.add(
+        responses.POST,
+        CHAT_COMPLETIONS_URL,
+        json={
+            "model": "gpt-4o-mini",
+            "choices": [{"message": {"role": "assistant", "content": None}, "finish_reason": "content_filter"}],
+            "usage": {"completion_tokens": 0},
+        },
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderRefusalError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+
+    assert "content_filter" in str(exc_info.value)
     assert exc_info.value.status_code == 200

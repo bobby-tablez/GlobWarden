@@ -7,6 +7,7 @@ import json
 import pytest
 
 from globwarden.engine.generate import GenerationError, generate_rules
+from globwarden.llm.errors import ProviderRefusalError
 from globwarden.models import ObfuscationCategory, ObfuscationFinding, RuleType
 
 from .conftest import (
@@ -367,6 +368,81 @@ class TestGenerationErrorHandling:
         provider = mock_provider_factory(responses=["not json at all, sorry"])
         with pytest.raises(GenerationError):
             generate_rules([_finding()], [RuleType.KQL], provider)
+
+
+class TestProviderRefusalHandling:
+    """Regression coverage for a real production bug: a provider refusal
+    (`ProviderRefusalError` -- a policy/safety decline, distinct from a
+    truncated or malformed response) on one finding's generation call used to
+    propagate all the way out of `generate_rules()`, discarding every other
+    finding's already-successful results along with it. A refusal is
+    content-specific, not systemic (unlike unparseable JSON, which still
+    correctly fail-fasts the whole batch -- see TestConcurrencyFailsFast), so
+    it must only affect the one finding that triggered it.
+    """
+
+    def test_refused_finding_comes_back_invalid_not_raised(self, mock_provider_factory):
+        def _responder(system_prompt: str, user_prompt: str) -> str:
+            raise ProviderRefusalError("model declined", status_code=200)
+
+        provider = mock_provider_factory(responder=_responder)
+
+        rules = generate_rules([_finding("f1")], [RuleType.REGEX, RuleType.KQL], provider)
+
+        assert len(rules) == 2  # one entry per requested format, never dropped
+        assert all(r.valid is False for r in rules)
+        assert all(r.finding_id == "f1" for r in rules)
+        assert all("refus" in (r.validation_note or "").lower() for r in rules)
+
+    def test_refusal_on_one_finding_does_not_discard_other_findings_results(self, mock_provider_factory):
+        good_response = combined_response_json({RuleType.REGEX: (VALID_REGEX_PATTERN, "explains it")})
+
+        def _responder(system_prompt: str, user_prompt: str) -> str:
+            if "Technique: refused-technique" in user_prompt:
+                raise ProviderRefusalError("model declined", status_code=200)
+            return good_response
+
+        findings = [
+            ObfuscationFinding(
+                id="f1",
+                category=ObfuscationCategory.OTHER,
+                technique_name="refused-technique",
+                description="d",
+                example_snippet=None,
+                confidence=0.5,
+                attack_mapping="T1027.010 (parent: T1027)",
+            ),
+            _finding("f2"),
+            _finding("f3"),
+        ]
+        provider = mock_provider_factory(responder=_responder)
+
+        rules = generate_rules(findings, [RuleType.REGEX], provider)
+
+        by_finding = {r.finding_id: r for r in rules}
+        assert len(rules) == 3  # nothing lost for f2/f3 despite f1's refusal
+        assert by_finding["f1"].valid is False
+        assert by_finding["f2"].valid is True
+        assert by_finding["f3"].valid is True
+
+    def test_refusal_during_a_validation_retry_stops_retrying_and_reports_last_known_state(self, mock_provider_factory):
+        broken = r"(?i)&\s*\(unclosed[grp"
+        combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
+        call_count = {"n": 0}
+
+        def _responder(system_prompt: str, user_prompt: str) -> str:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return combined
+            raise ProviderRefusalError("model declined the retry", status_code=200)
+
+        provider = mock_provider_factory(responder=_responder)
+
+        rules = generate_rules([_finding("f1")], [RuleType.REGEX], provider)
+
+        assert call_count["n"] == 2  # initial call + the one refused retry attempt
+        assert rules[0].valid is False
+        assert rules[0].content == broken  # last known state, not silently dropped
 
 
 class TestMalformedShapeCrashRegression:

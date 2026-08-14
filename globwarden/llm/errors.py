@@ -35,3 +35,17 @@ class ProviderAPIError(LLMError):
 
 class ProviderConnectionError(LLMError):
     """Raised when the provider can't be reached at all (DNS, timeout, refused)."""
+
+
+class ProviderRefusalError(ProviderAPIError):
+    """Raised when the provider explicitly declined to generate content for
+    this specific request (a policy/safety refusal), as opposed to a
+    truncated or otherwise malformed response.
+
+    This is content-specific, not systemic -- confirmed live, a refusal on
+    one finding's rule-generation call has no bearing on whether any other
+    finding's independent call will succeed. Callers that fail an entire
+    batch on any provider error (appropriate for a systemic problem like a
+    bad API key) should treat this subtype differently: typically as "this
+    one item didn't get a result," not "abort everything."
+    """

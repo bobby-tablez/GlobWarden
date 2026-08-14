@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "globwarden"
-version = "0.3.1"
+version = "0.3.2"
 description = "Feed it a threat-intel report; it hands back regex, KQL, SPL, YARA-L, and Sigma detection content for command obfuscation techniques (MITRE ATT&CK T1027.010)."
 readme = "README.md"
 license = "Apache-2.0"

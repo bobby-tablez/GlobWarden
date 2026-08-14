@@ -7,16 +7,25 @@ from globwarden.llm.errors import (
     LLMError,
     ProviderAPIError,
     ProviderConnectionError,
+    ProviderRefusalError,
     RateLimitError,
 )
 
 
 @pytest.mark.parametrize(
     "cls",
-    [AuthenticationError, RateLimitError, ProviderAPIError, ProviderConnectionError],
+    [AuthenticationError, RateLimitError, ProviderAPIError, ProviderConnectionError, ProviderRefusalError],
 )
 def test_all_errors_are_llm_errors(cls):
     assert issubclass(cls, LLMError)
+
+
+def test_provider_refusal_error_is_a_provider_api_error():
+    # Subclassing (not a sibling) matters: existing broad
+    # `except ProviderAPIError` catch sites must keep working unchanged for
+    # callers that don't need to distinguish a refusal from any other
+    # non-2xx-shaped provider failure.
+    assert issubclass(ProviderRefusalError, ProviderAPIError)
 
 
 def test_provider_api_error_carries_status_and_body():

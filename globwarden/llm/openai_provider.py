@@ -18,7 +18,13 @@ import requests
 
 from ._imageutil import sniff_image_mime_type
 from .base import LLMProvider, LLMResponse
-from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionError, RateLimitError
+from .errors import (
+    AuthenticationError,
+    ProviderAPIError,
+    ProviderConnectionError,
+    ProviderRefusalError,
+    RateLimitError,
+)
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -117,6 +123,22 @@ class OpenAIProvider(LLMProvider):
             # that actually explains why (e.g. "length" means truncated).
             finish_reason = choice.get("finish_reason")
             usage = data.get("usage", {})
+
+            if finish_reason == "content_filter":
+                # A policy/safety decline, not a truncated response -- see
+                # anthropic_provider.py's equivalent check and
+                # ProviderRefusalError's docstring. Content-specific, not
+                # systemic, so callers generating per-item content can treat
+                # this as "no result for this one item" rather than aborting
+                # an entire batch.
+                raise ProviderRefusalError(
+                    "OpenAI declined to generate content for this request "
+                    f"(finish_reason='content_filter', usage={usage!r}). This is a "
+                    "policy/safety decision, not a truncated or malformed response.",
+                    status_code=resp.status_code,
+                    body=str(data)[:2000],
+                )
+
             raise ProviderAPIError(
                 "OpenAI returned a 200 response with no usable text content "
                 f"(finish_reason={finish_reason!r}, usage={usage!r}). If "

@@ -26,6 +26,7 @@ from globwarden.llm.errors import (
     AuthenticationError,
     ProviderAPIError,
     ProviderConnectionError,
+    ProviderRefusalError,
     RateLimitError,
 )
 
@@ -328,3 +329,82 @@ def test_empty_content_list_raises_clear_diagnostic_error_not_silent_empty_text(
     with pytest.raises(ProviderAPIError) as exc_info:
         provider.complete(system_prompt="sys", user_prompt="user")
     assert "no usable text content" in str(exc_info.value)
+
+
+# --- Regression: real production bug (extended thinking exhausting max_tokens) ---
+#
+# A live scan against a content-rich real-world report hit stop_reason
+# "max_tokens" with content block types=['thinking'] and thinking_tokens
+# essentially equal to the full max_tokens budget -- claude-opus-5 thinks by
+# default (this provider never requested it), and that thinking has no cap
+# of its own, so on a sufficiently complex input it can consume the entire
+# budget before any answer text is ever emitted, no matter how high
+# max_tokens is raised. Confirmed live against the real API: the identical
+# request with `"thinking": {"type": "disabled"}` returns real `text`
+# content immediately instead. Fixed by always disabling thinking, since
+# GlobWarden only ever wants a deterministic JSON answer, never a reasoning
+# transcript.
+
+
+@responses.activate
+def test_thinking_is_always_disabled_in_the_request_body():
+    responses.add(
+        responses.POST,
+        MESSAGES_URL,
+        json={"model": "claude-opus-5", "content": [{"type": "text", "text": "ok"}]},
+        status=200,
+    )
+    provider = make_provider()
+    provider.complete(system_prompt="sys", user_prompt="user")
+    body = json.loads(responses.calls[0].request.body)
+    assert body["thinking"] == {"type": "disabled"}
+
+
+# --- Regression: real production bug (safety refusal mis-diagnosed as truncation) ---
+#
+# A live scan hit stop_reason "refusal" (an explicit policy/safety decline, empty
+# content array, zero output tokens) on a rule-generation call for one finding.
+# The generic empty-text error message told the user to raise ANTHROPIC_MAX_TOKENS
+# -- actively wrong advice for a refusal, which no amount of budget fixes. Fixed
+# by raising a distinct ProviderRefusalError with accurate guidance, so callers
+# (see engine.generate) can also tell this apart from a truncated response and
+# treat it as content-specific rather than a systemic failure.
+
+
+@responses.activate
+def test_refusal_stop_reason_raises_distinct_refusal_error_not_generic_api_error():
+    responses.add(
+        responses.POST,
+        MESSAGES_URL,
+        json={
+            "model": "claude-opus-5",
+            "content": [],
+            "stop_reason": "refusal",
+            "usage": {"input_tokens": 1246, "output_tokens": 0},
+        },
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderRefusalError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user", json_mode=True)
+
+    message = str(exc_info.value)
+    assert "refusal" in message.lower()
+    assert "ANTHROPIC_MAX_TOKENS" not in message  # wrong advice for this case
+    assert exc_info.value.status_code == 200
+
+
+@responses.activate
+def test_refusal_error_is_also_a_provider_api_error_for_generic_catch_sites():
+    # ProviderRefusalError subclasses ProviderAPIError so existing broad
+    # `except ProviderAPIError` / `except LLMError` catch sites still work
+    # unchanged for callers that don't need the distinction.
+    responses.add(
+        responses.POST,
+        MESSAGES_URL,
+        json={"model": "claude-opus-5", "content": [], "stop_reason": "refusal", "usage": {}},
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderAPIError):
+        provider.complete(system_prompt="sys", user_prompt="user")

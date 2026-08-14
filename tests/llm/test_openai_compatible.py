@@ -17,6 +17,7 @@ from globwarden.llm.errors import (
     AuthenticationError,
     ProviderAPIError,
     ProviderConnectionError,
+    ProviderRefusalError,
     RateLimitError,
 )
 from globwarden.llm.lmstudio_provider import LMStudioProvider
@@ -199,6 +200,27 @@ def test_empty_content_raises_clear_diagnostic_error_not_silent_empty_text():
     assert "no usable text content" in message
     assert "length" in message
     assert exc_info.value.status_code == 200
+
+
+@responses.activate
+def test_content_filter_finish_reason_raises_distinct_refusal_error():
+    # A policy/safety decline, not a truncated response -- see
+    # anthropic_provider.py's equivalent live-confirmed regression. Rare for
+    # a local server, but honored in case one sits behind a compliant proxy.
+    responses.add(
+        responses.POST,
+        OLLAMA_CHAT_URL,
+        json={
+            "model": "llama3.2",
+            "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "content_filter"}],
+            "usage": {"completion_tokens": 0},
+        },
+        status=200,
+    )
+    provider = OllamaProvider(model="llama3.2")
+    with pytest.raises(ProviderRefusalError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="hi")
+    assert "content_filter" in str(exc_info.value)
 
 
 @responses.activate

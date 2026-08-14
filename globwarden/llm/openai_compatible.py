@@ -18,7 +18,13 @@ import requests
 
 from ._imageutil import sniff_image_mime_type
 from .base import LLMProvider, LLMResponse
-from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionError, RateLimitError
+from .errors import (
+    AuthenticationError,
+    ProviderAPIError,
+    ProviderConnectionError,
+    ProviderRefusalError,
+    RateLimitError,
+)
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -146,6 +152,21 @@ class OpenAICompatibleProvider(LLMProvider):
             # than for a cloud provider).
             finish_reason = choice.get("finish_reason")
             usage = data.get("usage", {})
+
+            if finish_reason == "content_filter":
+                # A policy/safety decline, not a truncated response -- see
+                # anthropic_provider.py's equivalent check and
+                # ProviderRefusalError's docstring. Rare for a local server
+                # (most don't run a moderation layer), but honored here in
+                # case one sits behind a compliant proxy.
+                raise ProviderRefusalError(
+                    f"{self.name} declined to generate content for this request "
+                    f"(finish_reason='content_filter', usage={usage!r}). This is a "
+                    "policy/safety decision, not a truncated or malformed response.",
+                    status_code=resp.status_code,
+                    body=str(data)[:2000],
+                )
+
             raise ProviderAPIError(
                 f"{self.name} returned a 200 response with no usable text content "
                 f"(finish_reason={finish_reason!r}, usage={usage!r}). If "
