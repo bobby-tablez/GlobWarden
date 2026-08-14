@@ -47,14 +47,25 @@ def test_version_flag():
 
 
 def test_help_lists_commands_and_exits_zero():
-    result = runner.invoke(cli_module.app, ["--help"])
+    # Pin a generously wide terminal width: rich_markup_mode="rich" renders
+    # --help through Rich, which truncates its options table with an
+    # ellipsis (e.g. "--provi…") once the detected console width gets narrow
+    # enough -- a real CI failure (GitHub Actions' runners apparently detect
+    # a narrower width than a typical local terminal) traced back to exactly
+    # this, on the sibling test below. Without pinning COLUMNS, this
+    # assertion's correctness depends on whatever width the ambient
+    # environment happens to report, which has nothing to do with whether
+    # the CLI itself is actually broken.
+    result = runner.invoke(cli_module.app, ["--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     assert "scan" in result.stdout
     assert "providers" in result.stdout
 
 
 def test_scan_help_documents_all_required_options():
-    result = runner.invoke(cli_module.app, ["scan", "--help"])
+    # See the wide-COLUMNS comment on test_help_lists_commands_and_exits_zero
+    # above -- this is the test that actually caught the truncation bug in CI.
+    result = runner.invoke(cli_module.app, ["scan", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     for opt in [
         "--provider",
