@@ -70,16 +70,22 @@ CRITICAL RULES:
    doesn't actually mention or show it.
 2. If the content contains no obfuscation techniques at all, return an empty \
    "findings" array. An empty result is a correct result, not a failure.
-3. `example_snippet_b64` must be a verbatim excerpt from the source content (copy \
-   the exact characters), not something you wrote yourself, ENCODED AS STANDARD \
-   BASE64 (no line breaks in the encoded output). If the source describes a \
-   technique in prose only, with no code/command example present, set \
-   `example_snippet_b64` to null. Obfuscated command examples routinely contain \
+3. `technique_name_b64`, `description_b64`, `example_snippet_b64`, and \
+   `source_ref_b64` must EACH be ENCODED AS STANDARD BASE64 (no line breaks in the \
+   encoded output) — this applies to every free-text field in this schema, not \
+   just the verbatim source excerpt, because your own descriptive prose can just \
+   as easily quote a specific command, flag, or string from the source and break \
+   JSON the same way an unescaped verbatim excerpt would. Encode the exact UTF-8 \
+   text you intend for that field — verbatim source characters (copied exactly, \
+   not paraphrased) for `example_snippet_b64`, your own words for the other three \
+   — then put ONLY the base64 output in the field. `example_snippet_b64` and \
+   `source_ref_b64` may be null if there's nothing to put there (no code example \
+   present, or no determinable location reference); `technique_name_b64` and \
+   `description_b64` are always required. Free-text routinely contains \
    double-quote characters, backslashes, and other characters that break a plain \
-   JSON string if they aren't escaped exactly right — base64-encoding the raw \
-   excerpt sidesteps that entirely, since base64 output never contains a quote, \
-   backslash, or line break. Do the actual base64 encoding yourself on the exact \
-   characters you're copying; do not paraphrase or clean up the source text first.
+   JSON string if they aren't escaped exactly right — base64-encoding sidesteps \
+   that entirely, since base64 output never contains a quote, backslash, or line \
+   break.
 4. `confidence` is your own self-assessed confidence (0.0-1.0) that this is a \
    genuine T1027.010-style obfuscation technique correctly identified from the \
    source — not a measure of how dangerous it is.
@@ -100,12 +106,12 @@ exactly this schema:
     {
       "id": "f1",
       "category": "wildcard_resolution",
-      "technique_name": "short human-readable name, e.g. 'Wildcard Get-Alias to Invoke-Expression'",
-      "description": "1-3 sentences, in your own words, explaining what this technique does and how it evades naive detection",
+      "technique_name_b64": "base64-encoded short human-readable name, e.g. 'Wildcard Get-Alias to Invoke-Expression'",
+      "description_b64": "base64-encoded 1-3 sentences on what the technique does and how it evades naive detection",
       "example_snippet_b64": "base64-encoded verbatim excerpt from the source, or null if none is present",
       "confidence": 0.9,
       "attack_mapping": "T1027.010 (parent: T1027)",
-      "source_ref": "page number, URL fragment, or line range if determinable, else null"
+      "source_ref_b64": "base64-encoded page number, URL fragment, or line range if determinable, else null"
     }
   ]
 }

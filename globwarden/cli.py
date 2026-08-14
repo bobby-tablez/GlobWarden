@@ -278,16 +278,24 @@ def _sniff_requested_rule_types(system_prompt: str) -> list[RuleType]:
     return [rt for rt in _RULE_TYPE_SECTION_ORDER if f"### {rt.value}" in system_prompt]
 
 
+def _b64_or_none(value: str | None) -> str | None:
+    return base64.b64encode(value.encode("utf-8")).decode("ascii") if value else None
+
+
 def _fake_finding_response_dict(finding: dict) -> dict:
     """Build one finding's JSON-response dict from its `_CANNED_FINDINGS`
-    entry, base64-encoding `example_snippet` into `example_snippet_b64` --
+    entry, base64-encoding every free-text field (`technique_name`,
+    `description`, `example_snippet`, `source_ref`) into its `*_b64` form --
     `_CANNED_FINDINGS` keeps the plain-text form for readability in this
     source file, but the real schema (`DETECTION_SYSTEM_PROMPT`) asks for
-    base64, and FakeProvider should exercise that exact real decode path
-    (`engine.detect._decode_example_snippet`), not a shortcut."""
-    result = {k: v for k, v in finding.items() if not k.startswith("_") and k != "example_snippet"}
-    snippet = finding.get("example_snippet")
-    result["example_snippet_b64"] = base64.b64encode(snippet.encode("utf-8")).decode("ascii") if snippet else None
+    base64 on all four, and FakeProvider should exercise that exact real
+    decode path (`engine.detect._decode_b64_field`), not a shortcut."""
+    plain_keys = {"technique_name", "description", "example_snippet", "source_ref"}
+    result = {k: v for k, v in finding.items() if not k.startswith("_") and k not in plain_keys}
+    result["technique_name_b64"] = _b64_or_none(finding.get("technique_name"))
+    result["description_b64"] = _b64_or_none(finding.get("description"))
+    result["example_snippet_b64"] = _b64_or_none(finding.get("example_snippet"))
+    result["source_ref_b64"] = _b64_or_none(finding.get("source_ref"))
     return result
 
 

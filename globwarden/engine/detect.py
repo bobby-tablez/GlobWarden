@@ -107,24 +107,26 @@ def _chunk_text(
     return chunks
 
 
-def _decode_example_snippet(raw: dict) -> str | None:
-    """Pull the verbatim source excerpt out of a raw finding dict.
+def _decode_b64_field(raw: dict, b64_key: str, plain_key: str) -> str | None:
+    """Pull a free-text field out of a raw finding dict, decoding it from base64.
 
-    The prompt asks for this as base64 (`example_snippet_b64`), specifically
-    so a verbatim copy of messy real-world command-line text -- full of the
-    quotes/backslashes most likely to break a plain JSON string -- never has
-    to survive JSON's own escaping rules at all. Confirmed live: even after
-    `_parsing.py`'s repair pass, a real Anthropic response still failed to
-    parse from an unescaped quote inside a raw `example_snippet` value;
-    base64 removes that failure mode by construction rather than trying to
-    heuristically patch every way a model can get manual escaping wrong.
+    Every free-text field in the detection schema (`technique_name_b64`,
+    `description_b64`, `example_snippet_b64`, `source_ref_b64`) is asked for as
+    base64, not just the verbatim source excerpt -- a real production bug showed
+    that model-authored prose (a `description` quoting a specific command or
+    flag from the source, e.g. "builds a PowerShell '...' string") can embed an
+    unescaped quote and break JSON exactly the same way a raw `example_snippet`
+    copy can. Even after `_parsing.py`'s repair pass, a real Anthropic response
+    still failed to parse from this shape; base64 removes the failure mode by
+    construction rather than trying to heuristically patch every way a model can
+    get manual escaping wrong, for every free-text field, not just one.
 
-    Falls back to a plain `example_snippet` key (and, if that isn't valid
-    base64, to using the `example_snippet_b64` value as-is) for leniency --
-    a model that ignores the schema and returns raw text anyway shouldn't
-    lose that finding entirely, just lose the reliability guarantee for it.
+    Falls back to the plain `<plain_key>` key (and, if the b64 value isn't
+    actually valid base64, to using it as-is) for leniency -- a model that
+    ignores the schema and returns raw text anyway shouldn't lose that finding
+    entirely, just lose the reliability guarantee for that field.
     """
-    b64_value = raw.get("example_snippet_b64")
+    b64_value = raw.get(b64_key)
     if b64_value:
         try:
             return base64.b64decode(str(b64_value), validate=True).decode("utf-8")
@@ -135,7 +137,7 @@ def _decode_example_snippet(raw: dict) -> str | None:
             # Use it verbatim rather than discarding a real finding over it.
             return str(b64_value)
 
-    raw_value = raw.get("example_snippet")
+    raw_value = raw.get(plain_key)
     return str(raw_value) if raw_value else None
 
 
@@ -160,8 +162,8 @@ def _validate_finding(raw: dict, fallback_id: str) -> ObfuscationFinding | None:
         )
         return None
 
-    technique_name = raw.get("technique_name")
-    description = raw.get("description")
+    technique_name = _decode_b64_field(raw, "technique_name_b64", "technique_name")
+    description = _decode_b64_field(raw, "description_b64", "description")
     if not technique_name or not description:
         logger.warning(
             "Skipping finding %r: missing required technique_name/description",
@@ -176,9 +178,9 @@ def _validate_finding(raw: dict, fallback_id: str) -> ObfuscationFinding | None:
         confidence = 0.5
     confidence = max(0.0, min(1.0, confidence))
 
-    example_snippet = _decode_example_snippet(raw) or None
+    example_snippet = _decode_b64_field(raw, "example_snippet_b64", "example_snippet") or None
     attack_mapping = raw.get("attack_mapping") or "T1027.010 (parent: T1027)"
-    source_ref = raw.get("source_ref") or None
+    source_ref = _decode_b64_field(raw, "source_ref_b64", "source_ref") or None
 
     return ObfuscationFinding(
         id=fallback_id,

