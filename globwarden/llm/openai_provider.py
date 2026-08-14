@@ -22,6 +22,12 @@ from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionErr
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
+# A content-rich detection report can genuinely take a while to finish
+# generating -- see anthropic_provider.py's equivalent constant/note for the
+# real, confirmed-live incident (a tight timeout paired with a raised
+# max_tokens) this margin is sized against. OPENAI_TIMEOUT is the escape
+# hatch for anyone who needs to push it higher still.
+DEFAULT_TIMEOUT = 180.0
 
 
 class OpenAIProvider(LLMProvider):
@@ -32,12 +38,12 @@ class OpenAIProvider(LLMProvider):
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 60.0,
+        timeout: float | None = None,
     ):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.model = model
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout or float(os.environ.get("OPENAI_TIMEOUT", DEFAULT_TIMEOUT))
 
     def _headers(self) -> dict:
         return {
@@ -84,6 +90,17 @@ class OpenAIProvider(LLMProvider):
                 json=payload,
                 timeout=self.timeout,
             )
+        except requests.exceptions.Timeout as e:
+            # Distinct from "couldn't reach the host at all" -- see
+            # anthropic_provider.py's equivalent check for why this gets its
+            # own message (different remediation: raise the timeout, not
+            # assume a network problem).
+            raise ProviderConnectionError(
+                f"OpenAI did not finish responding within {self.timeout:.0f}s: {e}. "
+                "A content-rich report can genuinely take a while to finish "
+                "generating -- raise the timeout via OPENAI_TIMEOUT if this keeps "
+                "happening."
+            ) from e
         except requests.exceptions.RequestException as e:
             raise ProviderConnectionError(f"Could not reach OpenAI API: {e}") from e
 

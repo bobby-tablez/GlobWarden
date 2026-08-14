@@ -116,6 +116,18 @@ class OpenAICompatibleProvider(LLMProvider):
                 json=payload,
                 timeout=self.completion_timeout,
             )
+        except requests.exceptions.Timeout as e:
+            # Distinct from "couldn't reach the server at all" -- see
+            # anthropic_provider.py's equivalent check for why this gets its
+            # own message. Especially relevant for a local model: modest
+            # consumer hardware generating a content-rich detection response
+            # can genuinely take longer than completion_timeout allows.
+            raise ProviderConnectionError(
+                f"{self.name} did not finish responding within {self.completion_timeout:.0f}s: {e}. "
+                "A content-rich report can genuinely take a while for a local model to "
+                "finish generating on modest hardware -- pass a larger completion_timeout "
+                "if this keeps happening."
+            ) from e
         except requests.exceptions.RequestException as e:
             raise ProviderConnectionError(f"Could not reach {self.name} server at {self.base_url}: {e}") from e
 

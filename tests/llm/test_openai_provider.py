@@ -163,6 +163,29 @@ def test_connection_failure_raises_provider_connection_error():
         provider.complete(system_prompt="sys", user_prompt="user")
 
 
+@responses.activate
+def test_read_timeout_raises_distinct_actionable_message():
+    # See anthropic_provider.py's equivalent regression test for the real
+    # production incident this class of fix addresses.
+    responses.add(
+        responses.POST,
+        CHAT_COMPLETIONS_URL,
+        body=requests.exceptions.ReadTimeout("read timed out"),
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderConnectionError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+    message = str(exc_info.value)
+    assert "did not finish responding" in message
+    assert "OPENAI_TIMEOUT" in message
+
+
+def test_default_timeout_env_var_override(monkeypatch):
+    monkeypatch.setenv("OPENAI_TIMEOUT", "45")
+    provider = OpenAIProvider(api_key="k")
+    assert provider.timeout == 45.0
+
+
 def test_is_available_true_with_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     provider = OpenAIProvider(api_key="sk-present")

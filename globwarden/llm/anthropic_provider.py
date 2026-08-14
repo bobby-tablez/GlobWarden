@@ -21,6 +21,14 @@ with no indication why. Raised the default and, since there's no way to pick
 one number that's right for every report, added `ANTHROPIC_MAX_TOKENS` as an
 env var escape hatch (matching the existing `ANTHROPIC_MODEL` pattern) for
 anyone who needs to push it higher still.
+
+`timeout` note: raising max_tokens 4x (above) has a direct, confirmed-live
+side effect -- claude-opus-5 generating up to 4x more output before it's
+done takes proportionally longer to stream back, and the original 60s
+default (a reasonable number for the old, tighter max_tokens) started timing
+out on real content-rich reports as a result. Raised in step with the
+max_tokens change, with `ANTHROPIC_TIMEOUT` as the matching env var escape
+hatch.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_MODEL = "claude-opus-5"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MAX_TOKENS = 16_000
+DEFAULT_TIMEOUT = 300.0
 
 
 class AnthropicProvider(LLMProvider):
@@ -48,13 +57,13 @@ class AnthropicProvider(LLMProvider):
         api_key: str | None = None,
         model: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         max_tokens: int | None = None,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout or float(os.environ.get("ANTHROPIC_TIMEOUT", DEFAULT_TIMEOUT))
         self.max_tokens = max_tokens or int(os.environ.get("ANTHROPIC_MAX_TOKENS", DEFAULT_MAX_TOKENS))
 
     def _headers(self) -> dict:
@@ -114,6 +123,21 @@ class AnthropicProvider(LLMProvider):
                 json=payload,
                 timeout=self.timeout,
             )
+        except requests.exceptions.Timeout as e:
+            # A distinct case from "couldn't reach the host at all" -- the
+            # request went out fine, the model just didn't finish (or the
+            # response didn't finish streaming back) within `self.timeout`
+            # seconds. Confirmed live: this is a real, expected outcome for
+            # a genuinely large max_tokens on a content-rich report, not
+            # necessarily a network problem -- the remediation is different
+            # (raise the timeout), so it gets its own message.
+            raise ProviderConnectionError(
+                f"Anthropic did not finish responding within {self.timeout:.0f}s: {e}. "
+                "A high max_tokens value (see ANTHROPIC_MAX_TOKENS) on a content-rich "
+                "report can genuinely take a while to finish generating -- raise the "
+                "timeout via ANTHROPIC_TIMEOUT if this keeps happening, rather than "
+                "assuming it's a network problem."
+            ) from e
         except requests.exceptions.RequestException as e:
             raise ProviderConnectionError(f"Could not reach Anthropic API: {e}") from e
 

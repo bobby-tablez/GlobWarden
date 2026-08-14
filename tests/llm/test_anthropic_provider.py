@@ -186,6 +186,40 @@ def test_connection_failure_raises_provider_connection_error():
         provider.complete(system_prompt="sys", user_prompt="user")
 
 
+@responses.activate
+def test_read_timeout_raises_distinct_actionable_message():
+    # Regression: a real scan timed out at the original 60s default right
+    # after max_tokens was raised 4x -- a longer response genuinely takes
+    # longer to generate/stream. The timeout error must say so distinctly
+    # from "couldn't reach the host at all" (different remediation: raise
+    # ANTHROPIC_TIMEOUT, not assume a network problem).
+    responses.add(responses.POST, MESSAGES_URL, body=requests.exceptions.ReadTimeout("read timed out"))
+    provider = make_provider()
+    with pytest.raises(ProviderConnectionError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+    message = str(exc_info.value)
+    assert "did not finish responding" in message
+    assert "ANTHROPIC_TIMEOUT" in message
+
+
+def test_default_timeout_was_raised_from_the_original_too_tight_value(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_TIMEOUT", raising=False)
+    provider = AnthropicProvider(api_key="k")
+    assert provider.timeout > 60.0
+
+
+def test_timeout_env_var_override(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_TIMEOUT", "45")
+    provider = AnthropicProvider(api_key="k")
+    assert provider.timeout == 45.0
+
+
+def test_explicit_timeout_kwarg_overrides_env_var(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_TIMEOUT", "45")
+    provider = AnthropicProvider(api_key="k", timeout=12.0)
+    assert provider.timeout == 12.0
+
+
 def test_is_available_true_with_key():
     provider = AnthropicProvider(api_key="sk-ant-present")
     assert provider.is_available() is True

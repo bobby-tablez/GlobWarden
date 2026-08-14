@@ -202,6 +202,19 @@ def test_empty_content_raises_clear_diagnostic_error_not_silent_empty_text():
 
 
 @responses.activate
+def test_read_timeout_raises_distinct_actionable_message():
+    # See anthropic_provider.py's equivalent regression test for the real
+    # production incident this class of fix addresses.
+    responses.add(responses.POST, OLLAMA_CHAT_URL, body=requests.exceptions.ReadTimeout("read timed out"))
+    provider = OllamaProvider(model="llama3.2")
+    with pytest.raises(ProviderConnectionError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="hi")
+    message = str(exc_info.value)
+    assert "did not finish responding" in message
+    assert "completion_timeout" in message
+
+
+@responses.activate
 def test_is_available_true_when_server_reachable():
     responses.add(responses.GET, OLLAMA_MODELS_URL, json={"data": [{"id": "llama3.2"}]}, status=200)
     provider = OllamaProvider()

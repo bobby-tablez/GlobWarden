@@ -22,6 +22,11 @@ from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionErr
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = "gemini-2.0-flash"
+# A content-rich detection report can genuinely take a while to finish
+# generating -- see anthropic_provider.py's equivalent constant/note for the
+# real, confirmed-live incident this margin is sized against. GEMINI_TIMEOUT
+# is the escape hatch for anyone who needs to push it higher still.
+DEFAULT_TIMEOUT = 180.0
 
 
 class GeminiProvider(LLMProvider):
@@ -32,14 +37,14 @@ class GeminiProvider(LLMProvider):
         api_key: str | None = None,
         model: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 60.0,
+        timeout: float | None = None,
     ):
         # GOOGLE_API_KEY is the primary convention; GEMINI_API_KEY is a common
         # alternative other tools in this space also accept — try both.
         self.api_key = api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         self.model = model or os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout or float(os.environ.get("GEMINI_TIMEOUT", DEFAULT_TIMEOUT))
 
     def _headers(self) -> dict:
         return {
@@ -72,6 +77,17 @@ class GeminiProvider(LLMProvider):
         url = f"{self.base_url}/models/{self.model}:generateContent"
         try:
             resp = requests.post(url, headers=self._headers(), json=payload, timeout=self.timeout)
+        except requests.exceptions.Timeout as e:
+            # Distinct from "couldn't reach the host at all" -- see
+            # anthropic_provider.py's equivalent check for why this gets its
+            # own message (different remediation: raise the timeout, not
+            # assume a network problem).
+            raise ProviderConnectionError(
+                f"Gemini did not finish responding within {self.timeout:.0f}s: {e}. "
+                "A content-rich report can genuinely take a while to finish "
+                "generating -- raise the timeout via GEMINI_TIMEOUT if this keeps "
+                "happening."
+            ) from e
         except requests.exceptions.RequestException as e:
             raise ProviderConnectionError(f"Could not reach Gemini API: {e}") from e
 

@@ -174,6 +174,25 @@ def test_connection_failure_raises_provider_connection_error():
         provider.complete(system_prompt="sys", user_prompt="user")
 
 
+@responses.activate
+def test_read_timeout_raises_distinct_actionable_message():
+    # See anthropic_provider.py's equivalent regression test for the real
+    # production incident this class of fix addresses.
+    responses.add(responses.POST, GENERATE_URL, body=requests.exceptions.ReadTimeout("read timed out"))
+    provider = make_provider()
+    with pytest.raises(ProviderConnectionError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+    message = str(exc_info.value)
+    assert "did not finish responding" in message
+    assert "GEMINI_TIMEOUT" in message
+
+
+def test_default_timeout_env_var_override(monkeypatch):
+    monkeypatch.setenv("GEMINI_TIMEOUT", "45")
+    provider = GeminiProvider(api_key="k")
+    assert provider.timeout == 45.0
+
+
 def test_is_available_true_with_key():
     provider = GeminiProvider(api_key="present")
     assert provider.is_available() is True
