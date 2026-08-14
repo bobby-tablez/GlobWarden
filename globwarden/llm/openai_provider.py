@@ -92,6 +92,24 @@ class OpenAIProvider(LLMProvider):
         data = resp.json()
         choice = data["choices"][0]
         text = choice["message"].get("content") or ""
+
+        if not text:
+            # See anthropic_provider.py's equivalent check for why this
+            # matters: a 200 response with no usable text is always a real
+            # problem here, and finish_reason is the one piece of context
+            # that actually explains why (e.g. "length" means truncated).
+            finish_reason = choice.get("finish_reason")
+            usage = data.get("usage", {})
+            raise ProviderAPIError(
+                "OpenAI returned a 200 response with no usable text content "
+                f"(finish_reason={finish_reason!r}, usage={usage!r}). If "
+                "finish_reason is 'length', the response was cut off before any "
+                "text was emitted; otherwise re-run with --verbose and check the "
+                "raw response.",
+                status_code=resp.status_code,
+                body=str(data)[:2000],
+            )
+
         return LLMResponse(
             text=text,
             model=data.get("model", self.model),

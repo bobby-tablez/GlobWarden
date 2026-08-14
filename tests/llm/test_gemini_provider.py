@@ -99,12 +99,19 @@ def test_images_are_embedded_as_inline_data():
 
 
 @responses.activate
-def test_empty_candidates_returns_empty_text_not_crash():
-    # e.g. a safety-filtered response with no candidates
+def test_empty_candidates_raises_clear_provider_error_not_silent_empty_text():
+    # e.g. a safety-filtered response with no candidates at all. A 200 with
+    # no usable text is always a real problem for this tool (every call site
+    # needs to run json.loads on the result) -- silently returning empty
+    # text just pushes a confusing "response was empty" failure three layers
+    # up with none of the diagnostic context available right here. Must
+    # raise a clean, catchable ProviderAPIError instead of an unhandled
+    # IndexError/KeyError, and without ever crashing.
     responses.add(responses.POST, GENERATE_URL, json={"candidates": []}, status=200)
     provider = make_provider()
-    resp = provider.complete(system_prompt="sys", user_prompt="user")
-    assert resp.text == ""
+    with pytest.raises(ProviderAPIError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+    assert "no usable text content" in str(exc_info.value)
 
 
 @responses.activate

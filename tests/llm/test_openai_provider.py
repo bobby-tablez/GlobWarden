@@ -185,3 +185,29 @@ def test_explicit_api_key_overrides_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
     provider = OpenAIProvider(api_key="sk-explicit")
     assert provider.api_key == "sk-explicit"
+
+
+@responses.activate
+def test_empty_content_raises_clear_diagnostic_error_not_silent_empty_text():
+    # A 200 response with no usable text is always a real problem for this
+    # tool -- see anthropic_provider.py's equivalent check/regression for the
+    # real production bug this class of fix addresses. finish_reason "length"
+    # means the response was truncated before any text was emitted.
+    responses.add(
+        responses.POST,
+        CHAT_COMPLETIONS_URL,
+        json={
+            "model": "gpt-4o-mini",
+            "choices": [{"message": {"role": "assistant", "content": None}, "finish_reason": "length"}],
+            "usage": {"completion_tokens": 4096},
+        },
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderAPIError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+
+    message = str(exc_info.value)
+    assert "no usable text content" in message
+    assert "length" in message
+    assert exc_info.value.status_code == 200

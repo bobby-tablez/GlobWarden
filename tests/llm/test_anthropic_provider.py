@@ -209,3 +209,88 @@ def test_default_model_is_claude_opus_5(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
     provider = AnthropicProvider(api_key="k")
     assert provider.model == "claude-opus-5"
+
+
+# --- Regression: real production bug ---------------------------------------
+#
+# A live scan against a content-rich real-world report hit the original
+# max_tokens default (4096) -- the response got cut off before any
+# `text`-type content block was ever emitted, and the caller only ever saw a
+# bare "response was empty" error three layers up, with zero information
+# about why. Fixed by raising the default and, since no single number is
+# right for every report, adding ANTHROPIC_MAX_TOKENS as an env var escape
+# hatch; and by raising a clear, diagnostic-carrying ProviderAPIError right
+# here instead of silently returning an empty LLMResponse.
+
+
+def test_default_max_tokens_was_raised_from_the_original_too_tight_value(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_MAX_TOKENS", raising=False)
+    provider = AnthropicProvider(api_key="k")
+    assert provider.max_tokens > 4096
+
+
+def test_max_tokens_env_var_override(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "32000")
+    provider = AnthropicProvider(api_key="k")
+    assert provider.max_tokens == 32000
+
+
+def test_explicit_max_tokens_kwarg_overrides_env_var(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "32000")
+    provider = AnthropicProvider(api_key="k", max_tokens=1234)
+    assert provider.max_tokens == 1234
+
+
+@responses.activate
+def test_max_tokens_is_actually_sent_in_the_request_body():
+    responses.add(
+        responses.POST,
+        MESSAGES_URL,
+        json={"model": "claude-opus-5", "content": [{"type": "text", "text": "ok"}]},
+        status=200,
+    )
+    provider = make_provider(max_tokens=9999)
+    provider.complete(system_prompt="sys", user_prompt="user")
+    body = json.loads(responses.calls[0].request.body)
+    assert body["max_tokens"] == 9999
+
+
+@responses.activate
+def test_truncated_response_with_no_text_block_raises_clear_diagnostic_error():
+    # Reproduces the exact real-world shape: stop_reason "max_tokens" and a
+    # content array with no `text`-type block at all -- the failure mode
+    # that used to silently produce an empty LLMResponse.
+    responses.add(
+        responses.POST,
+        MESSAGES_URL,
+        json={
+            "model": "claude-opus-5",
+            "content": [{"type": "thinking", "thinking": "still working on it..."}],
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 5000, "output_tokens": 4096},
+        },
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderAPIError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user", json_mode=True)
+
+    message = str(exc_info.value)
+    assert "no usable text content" in message
+    assert "max_tokens" in message
+    assert "thinking" in message  # the actual block type, for diagnosis
+    assert exc_info.value.status_code == 200
+
+
+@responses.activate
+def test_empty_content_list_raises_clear_diagnostic_error_not_silent_empty_text():
+    responses.add(
+        responses.POST,
+        MESSAGES_URL,
+        json={"model": "claude-opus-5", "content": [], "stop_reason": "end_turn"},
+        status=200,
+    )
+    provider = make_provider()
+    with pytest.raises(ProviderAPIError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="user")
+    assert "no usable text content" in str(exc_info.value)

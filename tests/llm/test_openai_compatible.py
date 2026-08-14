@@ -175,6 +175,33 @@ def test_500_raises_provider_api_error():
 
 
 @responses.activate
+def test_empty_content_raises_clear_diagnostic_error_not_silent_empty_text():
+    # A 200 response with no usable text is always a real problem for this
+    # tool -- see anthropic_provider.py's equivalent check/regression for the
+    # real production bug this class of fix addresses. A local model hitting
+    # its own small max-output/context cap is a realistic way to trigger
+    # finish_reason "length" here.
+    responses.add(
+        responses.POST,
+        OLLAMA_CHAT_URL,
+        json={
+            "model": "llama3.2",
+            "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "length"}],
+            "usage": {"completion_tokens": 128},
+        },
+        status=200,
+    )
+    provider = OllamaProvider(model="llama3.2")
+    with pytest.raises(ProviderAPIError) as exc_info:
+        provider.complete(system_prompt="sys", user_prompt="hi")
+
+    message = str(exc_info.value)
+    assert "no usable text content" in message
+    assert "length" in message
+    assert exc_info.value.status_code == 200
+
+
+@responses.activate
 def test_is_available_true_when_server_reachable():
     responses.add(responses.GET, OLLAMA_MODELS_URL, json={"data": [{"id": "llama3.2"}]}, status=200)
     provider = OllamaProvider()

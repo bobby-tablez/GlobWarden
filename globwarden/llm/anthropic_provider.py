@@ -9,6 +9,18 @@ rather than a cheaper one — cost/quality tradeoffs are the operator's call,
 not baked into the tool, so override via the `model=` constructor kwarg, the
 `--model` CLI flag (wired up by the registry), or the `ANTHROPIC_MODEL`
 env var if you want a cheaper/faster model (e.g. `claude-haiku-4-5`).
+
+`max_tokens` note: unlike OpenAI/Gemini, the Messages API requires this as a
+mandatory field -- there's no "just let the model decide" option, so this
+provider has to pick a real number. Confirmed live: the original default
+(4096) was tight enough that a real scan against a content-rich report (many
+distinct findings, each with a full description and a base64-encoded verbatim
+snippet) hit it, the response got cut off before any `text`-type content
+block was ever emitted, and the caller saw a bare "response was empty" error
+with no indication why. Raised the default and, since there's no way to pick
+one number that's right for every report, added `ANTHROPIC_MAX_TOKENS` as an
+env var escape hatch (matching the existing `ANTHROPIC_MODEL` pattern) for
+anyone who needs to push it higher still.
 """
 
 from __future__ import annotations
@@ -25,7 +37,7 @@ from .errors import AuthenticationError, ProviderAPIError, ProviderConnectionErr
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_MODEL = "claude-opus-5"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MAX_TOKENS = 16_000
 
 
 class AnthropicProvider(LLMProvider):
@@ -37,13 +49,13 @@ class AnthropicProvider(LLMProvider):
         model: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 60.0,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_tokens: int | None = None,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.max_tokens = max_tokens
+        self.max_tokens = max_tokens or int(os.environ.get("ANTHROPIC_MAX_TOKENS", DEFAULT_MAX_TOKENS))
 
     def _headers(self) -> dict:
         return {
@@ -108,8 +120,30 @@ class AnthropicProvider(LLMProvider):
         self._raise_for_status(resp)
 
         data = resp.json()
-        text_parts = [block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"]
+        content_blocks = data.get("content", [])
+        text_parts = [block.get("text", "") for block in content_blocks if block.get("type") == "text"]
         text = "".join(text_parts)
+
+        if not text:
+            # A 200 response with no usable text is always a real problem for
+            # this tool (every call site expects to run json.loads on the
+            # result) -- surface exactly why now, with the diagnostic detail
+            # to actually explain it, rather than letting a bare empty string
+            # travel three layers up to a generic "response was empty" error.
+            stop_reason = data.get("stop_reason")
+            block_types = [block.get("type") for block in content_blocks]
+            usage = data.get("usage", {})
+            raise ProviderAPIError(
+                "Anthropic returned a 200 response with no usable text content "
+                f"(stop_reason={stop_reason!r}, content block types={block_types!r}, "
+                f"usage={usage!r}, max_tokens={self.max_tokens}). This almost always "
+                "means the response was cut off before any text was emitted -- if "
+                "stop_reason is 'max_tokens', raise the ANTHROPIC_MAX_TOKENS env var; "
+                "otherwise re-run with --verbose and check the raw response.",
+                status_code=resp.status_code,
+                body=str(data)[:2000],
+            )
+
         return LLMResponse(
             text=text,
             model=data.get("model", self.model),

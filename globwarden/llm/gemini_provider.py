@@ -84,6 +84,24 @@ class GeminiProvider(LLMProvider):
             content_parts = candidates[0].get("content", {}).get("parts", [])
             text = "".join(p.get("text", "") for p in content_parts)
 
+        if not text:
+            # See anthropic_provider.py's equivalent check for why this
+            # matters: a 200 response with no usable text is always a real
+            # problem here. finishReason explains truncation ("MAX_TOKENS")
+            # or a safety block ("SAFETY"/"RECITATION"); promptFeedback can
+            # carry a block reason even when there are zero candidates at all.
+            finish_reason = candidates[0].get("finishReason") if candidates else None
+            prompt_feedback = data.get("promptFeedback")
+            raise ProviderAPIError(
+                "Gemini returned a 200 response with no usable text content "
+                f"(finishReason={finish_reason!r}, promptFeedback={prompt_feedback!r}). "
+                "If finishReason is 'MAX_TOKENS', the response was cut off before any "
+                "text was emitted; otherwise re-run with --verbose and check the raw "
+                "response.",
+                status_code=resp.status_code,
+                body=str(data)[:2000],
+            )
+
         return LLMResponse(
             text=text,
             model=data.get("modelVersion", self.model),
