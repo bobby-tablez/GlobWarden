@@ -17,6 +17,7 @@ effect; it matters for long PDFs/reports that split into several chunks.
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 import logging
 
@@ -106,6 +107,38 @@ def _chunk_text(
     return chunks
 
 
+def _decode_example_snippet(raw: dict) -> str | None:
+    """Pull the verbatim source excerpt out of a raw finding dict.
+
+    The prompt asks for this as base64 (`example_snippet_b64`), specifically
+    so a verbatim copy of messy real-world command-line text -- full of the
+    quotes/backslashes most likely to break a plain JSON string -- never has
+    to survive JSON's own escaping rules at all. Confirmed live: even after
+    `_parsing.py`'s repair pass, a real Anthropic response still failed to
+    parse from an unescaped quote inside a raw `example_snippet` value;
+    base64 removes that failure mode by construction rather than trying to
+    heuristically patch every way a model can get manual escaping wrong.
+
+    Falls back to a plain `example_snippet` key (and, if that isn't valid
+    base64, to using the `example_snippet_b64` value as-is) for leniency --
+    a model that ignores the schema and returns raw text anyway shouldn't
+    lose that finding entirely, just lose the reliability guarantee for it.
+    """
+    b64_value = raw.get("example_snippet_b64")
+    if b64_value:
+        try:
+            return base64.b64decode(str(b64_value), validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            # binascii.Error (invalid base64) is itself a ValueError subclass.
+            # Not actually valid base64 (or not valid UTF-8 once decoded) --
+            # a model that was asked for base64 but returned raw text anyway.
+            # Use it verbatim rather than discarding a real finding over it.
+            return str(b64_value)
+
+    raw_value = raw.get("example_snippet")
+    return str(raw_value) if raw_value else None
+
+
 def _validate_finding(raw: dict, fallback_id: str) -> ObfuscationFinding | None:
     """Validate and coerce a single raw finding dict into an `ObfuscationFinding`.
 
@@ -143,7 +176,7 @@ def _validate_finding(raw: dict, fallback_id: str) -> ObfuscationFinding | None:
         confidence = 0.5
     confidence = max(0.0, min(1.0, confidence))
 
-    example_snippet = raw.get("example_snippet") or None
+    example_snippet = _decode_example_snippet(raw) or None
     attack_mapping = raw.get("attack_mapping") or "T1027.010 (parent: T1027)"
     source_ref = raw.get("source_ref") or None
 
