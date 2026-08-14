@@ -125,7 +125,10 @@ globwarden/
                  asking for the minimal matching expression per format
                  (not a complete standalone rule) -- plus per-format
                  syntactic validation (regex compiles, YAML parses for
-                 Sigma, etc.). Independent findings' calls run
+                 Sigma, etc.). A format that fails validation is retried
+                 (failure reason fed back, narrow single-format prompt)
+                 up to DEFAULT_MAX_VALIDATION_RETRIES times before being
+                 returned as invalid. Independent findings' calls run
                  concurrently, bounded by DEFAULT_MAX_CONCURRENCY.
     prompts.py    Shared prompt templates for both detect.py and
                  generate.py — the wording that encodes "narrow input,

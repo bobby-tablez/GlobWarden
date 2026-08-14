@@ -532,8 +532,8 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
         </div>
         <div class="card">
           <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M17 3 L29 8 v9 c0 8-5 12-12 14-7-2-12-6-12-14 V8 Z"/><path d="M11 17 l4 4 8-9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <h3>Validated before you see it</h3>
-          <p>Every generated matching expression is checked before it's shown: regex is actually compiled, Sigma is actually YAML-parsed. Content that fails validation is marked invalid with the reason attached — never silently dropped, never silently trusted.</p>
+          <h3>Validated, retried, never silently wrong</h3>
+          <p>Every generated matching expression is checked before it's shown: regex is actually compiled, Sigma is actually YAML-parsed. A format that fails gets the failure reason fed back to the model and another try, capped at a few retries. Still invalid after that, it's shown flagged with the reason attached — never silently dropped, never silently trusted.</p>
         </div>
         <div class="card">
           <svg class="icon" viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="4" width="26" height="26" rx="4"/><path d="M11 12 h12 M11 17 h8 M11 22 h5" stroke-linecap="round"/></svg>
@@ -600,6 +600,10 @@ table.ctable{ width:100%; border-collapse:collapse; min-width:640px; }
 <span class="t-dim"># scan a local PDF with a fully local model, all five rule types (default)</span>
 <span class="t-prompt">$</span> <span class="t-cmd">globwarden scan ./incident-notes.pdf \
     --provider ollama</span>
+
+<span class="t-dim"># save the same colorized report layout as a clean text file, no scrollback needed</span>
+<span class="t-prompt">$</span> <span class="t-cmd">globwarden scan ./incident-notes.pdf \
+    --output-file report.txt</span>
 
 <span class="t-dim"># check which providers are configured and reachable</span>
 <span class="t-prompt">$</span> <span class="t-cmd">globwarden providers</span></pre>

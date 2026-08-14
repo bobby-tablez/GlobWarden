@@ -44,6 +44,7 @@ from pathlib import Path
 import typer
 import yaml
 from rich.console import Console
+from rich.markup import escape
 
 from globwarden import __version__, render
 from globwarden.llm.base import LLMProvider, LLMResponse
@@ -105,6 +106,15 @@ class OutputFormat(str, Enum):
     terminal = "terminal"
     json = "json"
     markdown = "markdown"
+
+
+# Fixed width used for --output-file's rendering of 'terminal'-style output.
+# The live terminal path adapts to whatever width the user's actual terminal
+# happens to be (which is why a wide monitor produces a very wide capture) --
+# a saved file should instead be a stable, portable width that reads well in
+# a normal editor/pager/PR diff regardless of who opens it or how wide their
+# screen was at scan time.
+FILE_OUTPUT_WIDTH = 120
 
 
 class ProviderChoice(str, Enum):
@@ -299,8 +309,14 @@ def _fake_findings_response(user_prompt: str) -> str:
 
 def _fake_pattern_and_explanation(user_prompt: str) -> tuple[str, str]:
     """Pick a canned regex pattern keyed off the `Category: ...` line that
-    `prompts.rule_generation_user_prompt` always embeds in the user prompt --
-    shared by both the combined-call path and the narrow regex-retry path."""
+    `prompts.rule_generation_user_prompt` always embeds in the user prompt.
+    Used for both the initial combined call and any single-format validation
+    retry (same underlying prompt-builder, just given a one-element
+    `rule_types` list) -- deliberately returns the same (still-broken, for
+    encoded_cradle) pattern every time, so FakeProvider exercises the real
+    "genuinely still invalid after exhausting every retry" code path, not
+    just a first-attempt failure that happens to fix itself. See
+    `_REGEX_TEMPLATES_BY_VALUE`."""
     match = re.search(r"Category:\s*(\S+)", user_prompt)
     category = match.group(1) if match else "other"
     pattern = _REGEX_TEMPLATES_BY_VALUE.get(category, _REGEX_TEMPLATES_BY_VALUE["other"])
@@ -308,20 +324,14 @@ def _fake_pattern_and_explanation(user_prompt: str) -> tuple[str, str]:
     return pattern, explanation
 
 
-def _fake_regex_retry_response(user_prompt: str) -> str:
-    """Schema-correct canned response for the narrow, single-purpose regex
-    retry call (matches `REGEX_SYSTEM_PROMPT`'s `{"pattern", "explanation"}`
-    shape). Deliberately returns the same (still-broken, for encoded_cradle)
-    pattern as the combined call would have -- see `_REGEX_TEMPLATES_BY_VALUE`."""
-    pattern, explanation = _fake_pattern_and_explanation(user_prompt)
-    return json.dumps({"pattern": pattern, "explanation": explanation})
-
-
 def _fake_combined_rule_response(rule_types: list[RuleType], user_prompt: str) -> str:
     """Schema-correct canned response for a combined generation call covering
     every format in `rule_types` -- one section per requested type, matching
     `prompts.build_generation_system_prompt`'s schema (minimal matching
-    expression per format, not a full standalone rule)."""
+    expression per format, not a full standalone rule). `rule_types` may be a
+    single element -- that's exactly the shape a validation retry uses (see
+    `engine.generate._finalize_with_retries`), and this function already
+    handles it correctly since it's the same prompt-builder either way."""
     pattern, explanation = _fake_pattern_and_explanation(user_prompt)
 
     payload: dict[str, dict] = {}
@@ -349,16 +359,17 @@ def _fake_combined_rule_response(rule_types: list[RuleType], user_prompt: str) -
 
 def _fake_response_for(system_prompt: str, user_prompt: str) -> str:
     try:
-        from globwarden.engine.prompts import DETECTION_SYSTEM_PROMPT, REGEX_SYSTEM_PROMPT
+        from globwarden.engine.prompts import DETECTION_SYSTEM_PROMPT
     except ImportError:
         return _fake_findings_response(user_prompt)
 
     stripped = system_prompt.strip()
     if stripped == DETECTION_SYSTEM_PROMPT.strip():
         return _fake_findings_response(user_prompt)
-    if stripped == REGEX_SYSTEM_PROMPT.strip():
-        return _fake_regex_retry_response(user_prompt)
 
+    # A validation retry uses the same combined-prompt builder as the
+    # initial call, just with a one-element rule_types list -- the "###
+    # <type>" marker sniff below handles both shapes identically.
     rule_types = _sniff_requested_rule_types(system_prompt)
     if rule_types:
         return _fake_combined_rule_response(rule_types, user_prompt)
@@ -767,7 +778,9 @@ def _parse_rule_types(raw: str) -> list[RuleType]:
         "Examples:\n\n"
         "  globwarden scan demo --provider fake\n\n"
         "  globwarden scan https://example.com/report --provider openai\n\n"
-        "  globwarden scan ./report.pdf --rules regex,sigma --output json > findings.json"
+        "  globwarden scan ./report.pdf --rules regex,sigma --output json > findings.json\n\n"
+        "  globwarden scan ./report.pdf --output-file report.txt\n\n"
+        "  globwarden scan ./report.pdf --output markdown --output-file report.md"
     )
 )
 def scan(
@@ -792,6 +805,15 @@ def scan(
         "--output",
         case_sensitive=False,
         help="How to render results. 'json'/'markdown' print clean, scriptable output to stdout with no rich styling.",
+    ),
+    output_file: Path | None = typer.Option(  # noqa: B008 - standard typer pattern
+        None,
+        "--output-file",
+        help="Write results to this file instead of stdout, in whichever --output "
+        "format was chosen. 'terminal' (the default) writes the same colorized "
+        "panel layout shown on screen, as plain text (box-drawing preserved, no "
+        "ANSI codes) at a fixed, portable width -- suitable for sharing or "
+        "archiving a scan that's too long for a terminal to scroll back through.",
     ),
     api_key: str | None = typer.Option(None, "--api-key", help="Override the provider's default API key env var."),
     base_url: str | None = typer.Option(
@@ -863,15 +885,17 @@ def scan(
 
             if not dry_run:
                 # engine.generate calls the provider once per finding (covering
-                # every requested rule type in that one combined call, plus an
-                # occasional narrow regex-only retry), running independent
-                # findings' calls concurrently -- against a real cloud LLM this
-                # can still take a few seconds, with the spinner's text
-                # otherwise static the whole time. Surfacing the expected call
-                # count at least sets an honest expectation instead of a silent
-                # "[3/3] generating detection rules…" that looks stalled on stage.
+                # every requested rule type in that one combined call), running
+                # independent findings' calls concurrently -- against a real
+                # cloud LLM this can still take a while, with the spinner's
+                # text otherwise static the whole time. Surfacing the expected
+                # call count at least sets an honest expectation instead of a
+                # silent "[3/3] generating detection rules…" that looks
+                # stalled on stage. "at least" because a format that fails
+                # validation gets retried (capped, per format) -- the true
+                # count can run higher than this floor.
                 call_estimate = len(findings)
-                calls_note = f" (~{call_estimate} LLM call{'s' if call_estimate != 1 else ''})" if call_estimate else ""
+                calls_note = f" (~{call_estimate}+ LLM call{'s' if call_estimate != 1 else ''})" if call_estimate else ""
                 stage.stage(f"[3/3] generating detection rules{calls_note}…")
                 generated_rules = _generate_rules(findings, rule_types, provider_inst)
 
@@ -916,7 +940,7 @@ def scan(
         )
         raise typer.Exit(code=1) from None
 
-    if output == OutputFormat.terminal:
+    if output == OutputFormat.terminal and output_file is None:
         out_console.print()
         render.render_results(out_console, findings, generated_rules, dry_run=dry_run)
         if not findings and verbose:
@@ -927,26 +951,67 @@ def scan(
         if not dry_run:
             out_console.print()
             render.render_summary(out_console, findings, generated_rules)
-    elif output == OutputFormat.json:
-        typer.echo(
-            render.to_json(
-                findings,
-                generated_rules,
-                source=source,
-                provider=provider_name,
-                model=resolved_model,
-            )
+    elif output_file is None:
+        content_str = (
+            render.to_json(findings, generated_rules, source=source, provider=provider_name, model=resolved_model)
+            if output == OutputFormat.json
+            else render.to_markdown(findings, generated_rules, source=source, provider=provider_name, model=resolved_model)
         )
-    else:  # markdown
-        typer.echo(
-            render.to_markdown(
-                findings,
-                generated_rules,
-                source=source,
-                provider=provider_name,
-                model=resolved_model,
+        typer.echo(content_str)
+    else:
+        # Written atomically (a temp file, renamed into place only once
+        # everything succeeded) and with a catch-all exception handler --
+        # not just OSError. A render-time bug or any other mid-write failure
+        # must never leave a truncated, misleadingly-plausible-looking file
+        # sitting at the real destination path for someone to open later
+        # unattended (the whole reason this feature exists is to be read
+        # later by someone who didn't watch the console), and must never dump
+        # a raw traceback either, matching this command's own "last resort"
+        # handling for every other failure mode.
+        tmp_path = output_file.with_name(output_file.name + ".tmp")
+        try:
+            if output == OutputFormat.terminal:
+                with open(tmp_path, "w", encoding="utf-8") as file_handle:
+                    # Rich auto-detects a real file isn't a live terminal and
+                    # renders plain text (box-drawing characters, layout, no
+                    # ANSI escape codes) accordingly -- no special flag
+                    # needed, same render.* calls as the live path, just a
+                    # different Console/width.
+                    target_console = Console(file=file_handle, width=FILE_OUTPUT_WIDTH)
+                    target_console.print()
+                    render.render_results(target_console, findings, generated_rules, dry_run=dry_run)
+                    if not findings and verbose:
+                        target_console.print()
+                        render.render_ingested_preview(target_console, content)
+                    if not dry_run:
+                        target_console.print()
+                        render.render_summary(target_console, findings, generated_rules)
+            else:
+                content_str = (
+                    render.to_json(findings, generated_rules, source=source, provider=provider_name, model=resolved_model)
+                    if output == OutputFormat.json
+                    else render.to_markdown(
+                        findings, generated_rules, source=source, provider=provider_name, model=resolved_model
+                    )
+                )
+                tmp_path.write_text(content_str, encoding="utf-8")
+            tmp_path.replace(output_file)
+        except Exception as exc:
+            tmp_path.unlink(missing_ok=True)
+            render.render_error(
+                err_console,
+                title="could not write --output-file",
+                message=f"Failed to write to {str(output_file)!r}: {exc}",
+                hint="Check the path is writable and its parent directory exists."
+                if isinstance(exc, OSError)
+                else "re-run with --verbose for the full traceback.",
+                verbose=verbose,
             )
-        )
+            raise typer.Exit(code=1) from None
+        # soft_wrap=True: a filesystem path must never be broken across a
+        # line by width-based wrapping (unlike prose, a wrapped path can't be
+        # copy-pasted back out usably).
+        err_console.print(f"[dim]✓ written to {escape(str(output_file))}[/dim]", soft_wrap=True)
 
 
 @app.command()

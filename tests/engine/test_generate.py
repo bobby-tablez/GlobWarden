@@ -16,7 +16,6 @@ from .conftest import (
     VALID_SPL_LINE,
     VALID_YARA_L_LINE,
     combined_response_json,
-    regex_response_json,
 )
 
 
@@ -47,28 +46,33 @@ class TestRegexValidation:
 
         re.compile(rule.content)  # must not raise
 
-    def test_broken_pattern_retried_then_fixed(self, mock_provider_factory):
+    def test_broken_pattern_retried_then_fixed_on_first_retry(self, mock_provider_factory):
         broken = r"(?i)&\s*\(unclosed[grp"  # genuinely invalid: unterminated character set
         fixed = VALID_REGEX_PATTERN
         combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
-        retry = regex_response_json(fixed)
+        retry = combined_response_json({RuleType.REGEX: (fixed, "explains it")})
         provider = mock_provider_factory(responses=[combined, retry])
 
         rules = generate_rules([_finding()], [RuleType.REGEX], provider)
 
-        assert provider.call_count == 2  # combined call + one narrow retry
+        # Stops retrying the moment a retry validates -- combined call + one
+        # retry, not the full cap.
+        assert provider.call_count == 2
         assert rules[0].valid is True
         assert rules[0].content == fixed
 
-    def test_broken_pattern_still_broken_after_retry_is_flagged_invalid(self, mock_provider_factory):
+    def test_broken_pattern_still_broken_after_exhausting_every_retry_is_flagged_invalid(self, mock_provider_factory):
+        from globwarden.engine.generate import DEFAULT_MAX_VALIDATION_RETRIES
+
         broken = r"(?i)&\s*\(unclosed[grp"
         combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
-        retry = regex_response_json(broken)
-        provider = mock_provider_factory(responses=[combined, retry])
+        provider = mock_provider_factory(responses=[combined])  # every call returns the same broken pattern
 
         rules = generate_rules([_finding()], [RuleType.REGEX], provider)
 
-        assert provider.call_count == 2
+        # 1 initial call + DEFAULT_MAX_VALIDATION_RETRIES retries, then it
+        # gives up -- the cap is a hard stop, not a suggestion.
+        assert provider.call_count == 1 + DEFAULT_MAX_VALIDATION_RETRIES
         rule = rules[0]
         assert rule.valid is False
         assert rule.validation_note is not None
@@ -76,13 +80,67 @@ class TestRegexValidation:
         # Never silently dropped — the broken content is still returned.
         assert rule.content == broken
 
+    def test_retry_cap_is_configurable(self, mock_provider_factory):
+        broken = r"(?i)&\s*\(unclosed[grp"
+        combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX], provider, max_validation_retries=0)
+
+        # 0 retries permitted -- exactly the one initial call, no retry at all.
+        assert provider.call_count == 1
+        assert rules[0].valid is False
+
+    def test_validation_note_mentions_retry_count_when_retries_happened(self, mock_provider_factory):
+        broken = r"(?i)&\s*\(unclosed[grp"
+        combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX], provider, max_validation_retries=2)
+
+        assert rules[0].valid is False
+        assert "still invalid after 2 retries" in rules[0].validation_note
+
+    def test_validation_note_uses_singular_retry_wording_for_exactly_one(self, mock_provider_factory):
+        broken = r"(?i)&\s*\(unclosed[grp"
+        combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX], provider, max_validation_retries=1)
+
+        assert rules[0].valid is False
+        assert "still invalid after 1 retry)" in rules[0].validation_note
+        assert "1 retries" not in rules[0].validation_note
+
+    def test_validation_note_has_no_retry_count_suffix_when_retries_are_disabled(self, mock_provider_factory):
+        # max_validation_retries=0 means the first (only) attempt's failure
+        # note is reported as-is -- no "(still invalid after 0 retries)"
+        # suffix, since no retry was ever attempted at all.
+        broken = r"(?i)&\s*\(unclosed[grp"
+        combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX], provider, max_validation_retries=0)
+
+        assert rules[0].valid is False
+        assert "still invalid after" not in rules[0].validation_note
+
+    def test_validation_note_has_no_retry_suffix_when_valid_on_first_try(self, mock_provider_factory):
+        response = combined_response_json({RuleType.REGEX: (VALID_REGEX_PATTERN, "explains it")})
+        provider = mock_provider_factory(responses=[response])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX], provider)
+
+        assert rules[0].valid is True
+        assert rules[0].validation_note is None
+
     def test_missing_pattern_key_flagged_invalid_not_silently_valid(self, mock_provider_factory):
         # Regression test: a well-formed JSON object simply missing the
         # "pattern" key used to default to content='' via parsed.get(...), and
         # re.compile('') succeeds (empty string is valid Python regex) -- so
         # this silently produced valid=True for a functionally useless rule.
         combined = json.dumps({"regex": {"explanation": "couldn't determine a pattern"}})
-        retry = regex_response_json("")
+        retry = combined_response_json({RuleType.REGEX: ("", "still couldn't")})
         provider = mock_provider_factory(responses=[combined, retry])
 
         rules = generate_rules([_finding()], [RuleType.REGEX], provider)
@@ -93,8 +151,7 @@ class TestRegexValidation:
 
     def test_empty_string_pattern_flagged_invalid(self, mock_provider_factory):
         combined = combined_response_json({RuleType.REGEX: ("", "explains it")})
-        retry = regex_response_json("")
-        provider = mock_provider_factory(responses=[combined, retry])
+        provider = mock_provider_factory(responses=[combined])
         rules = generate_rules([_finding()], [RuleType.REGEX], provider)
 
         rule = rules[0]
@@ -160,6 +217,33 @@ class TestSigmaValidation:
         assert rule.valid is False
         assert "mapping" in rule.validation_note.lower()
 
+    def test_sigma_retried_then_fixed_on_first_retry(self, mock_provider_factory):
+        # The retry loop generalizes to every format, not just regex -- prove
+        # it for Sigma specifically.
+        broken = "- just\n- a\n- list\n"
+        combined = combined_response_json({RuleType.SIGMA: (broken, "explains it")})
+        retry = combined_response_json({RuleType.SIGMA: (VALID_SIGMA_DETECTION_BLOCK, "fixed it")})
+        provider = mock_provider_factory(responses=[combined, retry])
+
+        rules = generate_rules([_finding()], [RuleType.SIGMA], provider)
+
+        assert provider.call_count == 2
+        assert rules[0].valid is True
+        assert rules[0].content == VALID_SIGMA_DETECTION_BLOCK
+
+    def test_sigma_still_broken_after_exhausting_every_retry_is_flagged_invalid(self, mock_provider_factory):
+        from globwarden.engine.generate import DEFAULT_MAX_VALIDATION_RETRIES
+
+        broken = "- just\n- a\n- list\n"
+        combined = combined_response_json({RuleType.SIGMA: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined])
+
+        rules = generate_rules([_finding()], [RuleType.SIGMA], provider)
+
+        assert provider.call_count == 1 + DEFAULT_MAX_VALIDATION_RETRIES
+        assert rules[0].valid is False
+        assert rules[0].content == broken
+
 
 class TestLineValidation:
     def test_valid_kql_line_passes(self, mock_provider_factory):
@@ -202,6 +286,33 @@ class TestLineValidation:
         rules = generate_rules([_finding()], [RuleType.KQL], provider)
         assert rules[0].valid is False
         assert "regex" in rules[0].validation_note.lower()
+
+    def test_kql_retried_then_fixed_on_first_retry(self, mock_provider_factory):
+        # The retry loop generalizes to every format, not just regex -- prove
+        # it for a "line" format (KQL/SPL/YARA-L) specifically.
+        broken = 'ProcessCommandLine has_any ("gal", "Get-Alias")'  # no regex operator
+        combined = combined_response_json({RuleType.KQL: (broken, "explains it")})
+        retry = combined_response_json({RuleType.KQL: (VALID_KQL_LINE, "fixed it")})
+        provider = mock_provider_factory(responses=[combined, retry])
+
+        rules = generate_rules([_finding()], [RuleType.KQL], provider)
+
+        assert provider.call_count == 2
+        assert rules[0].valid is True
+        assert rules[0].content == VALID_KQL_LINE
+
+    def test_kql_still_broken_after_exhausting_every_retry_is_flagged_invalid(self, mock_provider_factory):
+        from globwarden.engine.generate import DEFAULT_MAX_VALIDATION_RETRIES
+
+        broken = 'ProcessCommandLine has_any ("gal", "Get-Alias")'
+        combined = combined_response_json({RuleType.KQL: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined])
+
+        rules = generate_rules([_finding()], [RuleType.KQL], provider)
+
+        assert provider.call_count == 1 + DEFAULT_MAX_VALIDATION_RETRIES
+        assert rules[0].valid is False
+        assert rules[0].content == broken
 
     def test_spl_missing_regex_operator_flagged(self, mock_provider_factory):
         not_regex_based = 'search CommandLine="*gal*"'
@@ -286,6 +397,47 @@ class TestMalformedShapeCrashRegression:
             generate_rules([_finding()], [rule_type], provider)
 
         assert "not a JSON object" in str(exc_info.value)
+
+
+class TestRetryLoopCrossCutting:
+    def test_unparseable_retry_response_stops_retrying_and_returns_last_known_invalid_state(self, mock_provider_factory):
+        # A retry attempt that itself can't be parsed as JSON at all
+        # (GenerationError) must not crash the whole pipeline -- give up on
+        # that format and report its last known (invalid) state, since the
+        # initial combined call already succeeded and format-specific
+        # follow-up trouble is a legitimate, reportable outcome.
+        broken = r"(?i)&\s*\(unclosed[grp"
+        combined = combined_response_json({RuleType.REGEX: (broken, "explains it")})
+        provider = mock_provider_factory(responses=[combined, "not json at all, sorry"])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX], provider)
+
+        assert provider.call_count == 2  # initial call + the one failed retry attempt
+        assert rules[0].valid is False
+        assert rules[0].content == broken  # last known state, not silently dropped
+
+    def test_different_formats_for_the_same_finding_retry_independently(self, mock_provider_factory):
+        # regex is broken and needs a retry; sigma is valid from the start --
+        # sigma must not be retried just because a sibling format in the same
+        # combined response needed one.
+        broken_regex = r"(?i)&\s*\(unclosed[grp"
+        initial = combined_response_json(
+            {
+                RuleType.REGEX: (broken_regex, "explains it"),
+                RuleType.SIGMA: (VALID_SIGMA_DETECTION_BLOCK, "explains it"),
+            }
+        )
+        regex_retry = combined_response_json({RuleType.REGEX: (VALID_REGEX_PATTERN, "fixed it")})
+        provider = mock_provider_factory(responses=[initial, regex_retry])
+
+        rules = generate_rules([_finding()], [RuleType.REGEX, RuleType.SIGMA], provider)
+
+        assert provider.call_count == 2  # initial combined call + one regex-only retry
+        by_type = {r.rule_type: r for r in rules}
+        assert by_type[RuleType.REGEX].valid is True
+        assert by_type[RuleType.REGEX].content == VALID_REGEX_PATTERN
+        assert by_type[RuleType.SIGMA].valid is True
+        assert by_type[RuleType.SIGMA].content == VALID_SIGMA_DETECTION_BLOCK
 
 
 class TestMultipleFindingsAndRuleTypes:

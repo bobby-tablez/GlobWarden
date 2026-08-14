@@ -21,9 +21,10 @@ Two kinds of prompts live here:
    keeps responses small: one call per finding covers every requested format
    instead of one call per (finding, rule_type) pair.
 
-   ``REGEX_SYSTEM_PROMPT`` is kept as a standalone prompt too (not just embedded
-   in the combined one) because a failed regex gets exactly one narrow, cheap
-   retry call using this prompt alone -- see ``engine.generate``.
+   A format that fails validation gets retried with a narrow, single-format
+   prompt -- ``build_generation_system_prompt`` called with a one-element
+   list -- rather than the combined prompt, so a retry costs one small,
+   scoped call. See ``engine.generate`` for the (capped) retry loop.
 """
 
 from globwarden.models import RuleType
@@ -297,25 +298,6 @@ Respond with ONLY a single JSON object, no prose before or after it, with exactl
 one top-level key per format requested above:
 
 {schema}
-"""
-
-
-# Standalone single-purpose regex prompt, kept separate from the combined one
-# above: a regex that fails to compile gets exactly one narrow, cheap retry
-# call using this prompt alone (see engine.generate) rather than re-running
-# the full combined generation for every requested format.
-REGEX_SYSTEM_PROMPT = f"""You are a detection engineering assistant. Given a single obfuscation \
-technique finding (T1027.010 command obfuscation, or its parent T1027), generate \
-a Python-flavored regular expression that would help flag command-line or \
-script-block text exhibiting this specific technique.
-
-{_REGEX_BLOCK}
-
-Respond with ONLY a single JSON object, no prose before or after it:
-{{
-  "pattern": "the regex pattern string",
-  "explanation": "one or two plain-language sentences: what this catches and why"
-}}
 """
 
 

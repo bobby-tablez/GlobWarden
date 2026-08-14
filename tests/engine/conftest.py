@@ -148,14 +148,6 @@ def wildcard_finding_dict(finding_id: str = "f1") -> dict:
     }
 
 
-def regex_response_json(pattern: str, explanation: str = "Flags wildcard alias resolution.") -> str:
-    """Shape returned by the standalone, single-purpose regex prompt
-    (`prompts.REGEX_SYSTEM_PROMPT`) -- used for the regex-retry path, which
-    stays a narrow one-format call even though the primary generation call is
-    now combined across every requested format (see `combined_response_json`)."""
-    return json.dumps({"pattern": pattern, "explanation": explanation})
-
-
 def combined_response_json(sections: dict[RuleType, tuple[str, str]]) -> str:
     """Build a combined generation-call response: one call now covers every
     requested rule type for a finding, in the shape

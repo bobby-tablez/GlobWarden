@@ -1,25 +1,31 @@
-"""Detection-content generation, with validate-before-return.
+"""Detection-content generation, with validate-before-return and capped retry.
 
 `generate_rules` calls the provider once per finding — not once per (finding,
 rule_type) pair — using `prompts.build_generation_system_prompt` to cover every
 requested `RuleType` in a single combined JSON response, then validates each
 format's content before handing it back:
 
-- REGEX: `re.compile()`'d for real. On failure, the LLM gets one retry (using the
-  narrow, single-purpose `REGEX_SYSTEM_PROMPT`, not the combined prompt) with the
-  compiler error fed back; if it still doesn't compile, the rule is returned with
-  `valid=False` and a `validation_note` explaining why — never silently as if it
-  were fine.
+- REGEX: `re.compile()`'d for real.
 - SIGMA: GlobWarden asks for just the `detection:` block (selection(s) + a
   `condition` key), not a full rule — parsed for real with `yaml.safe_load`, then
-  checked for that minimal shape. Same validate-or-flag treatment, no retry.
+  checked for that minimal shape.
 - KQL / SPL / YARA_L: GlobWarden asks for a single matching line/clause, not a
   full query or rule. Full semantic validation isn't practical without a real
   backend (Sentinel/Splunk/Chronicle), so these get sanity checks — non-empty
   content, balanced brackets/parens/braces, and a check that the line actually
   looks like the kind of expression it claims to be (contains "regex" for
-  KQL/SPL, references a UDM event-variable field for YARA-L). Anything that
-  fails is flagged, never silently returned as valid.
+  KQL/SPL, references a UDM event-variable field for YARA-L).
+
+A format that fails validation gets retried — the failure reason fed back to
+the model, using a narrow single-format prompt (`build_generation_system_prompt`
+called with just that one `RuleType`, not the combined one used for the initial
+call) — up to `DEFAULT_MAX_VALIDATION_RETRIES` times. A format that's still
+invalid after exhausting its retries is returned as-is: `valid=False` and a
+`validation_note` explaining why, never silently dropped and never silently
+treated as if it were fine. A failed validation result the caller can't tell
+apart from a working one is worse than no result at all, which is the whole
+reason this retry loop exists — but it has to terminate, so the cap is a hard
+requirement, not a suggestion.
 
 This validate-before-return behavior is treated as a hard requirement, not an
 optional nicety — a `GeneratedRule` with `valid=True` is a real claim the CLI/UI
@@ -27,7 +33,7 @@ will display, and getting that claim wrong undermines the whole tool's
 credibility as a detection-engineering assistant.
 
 Findings are independent of one another, so their generation calls (including
-any regex retry) run concurrently via a thread pool — see `DEFAULT_MAX_CONCURRENCY`
+any retries) run concurrently via a thread pool — see `DEFAULT_MAX_CONCURRENCY`
 — since every `LLMProvider.complete()` implementation is a blocking, stateless-
 per-call HTTP request (no shared mutable state across calls), making thread-based
 concurrency the correct, minimal-invasiveness way to cut wall-clock time without
@@ -39,12 +45,12 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import re
+from collections.abc import Callable
 
 import yaml
 
 from globwarden.engine._parsing import JSONExtractionError, extract_json_object
 from globwarden.engine.prompts import (
-    REGEX_SYSTEM_PROMPT,
     RULE_CONTENT_KEY,
     RULE_SECTION_KEY,
     build_generation_system_prompt,
@@ -62,6 +68,16 @@ logger = logging.getLogger(__name__)
 # CLI tool, comfortably under typical per-minute request limits for the cloud
 # providers this tool supports.
 DEFAULT_MAX_CONCURRENCY = 5
+
+# Cap on retry attempts per (finding, rule_type) when validation fails --
+# total attempts for a format that keeps failing is 1 (initial) + this many.
+# A failed-validation result is never useful to the analyst (that's the whole
+# point of retrying it), but an uncapped retry loop against a model that
+# simply can't produce a valid pattern for a given technique would spin
+# forever burning API calls for a result that was never going to validate --
+# 2 retries (3 attempts total) is enough to recover from a transient/one-off
+# mistake without turning a single stubborn format into a runaway cost.
+DEFAULT_MAX_VALIDATION_RETRIES = 2
 
 
 class GenerationError(Exception):
@@ -217,6 +233,16 @@ def _validate_line(content: str, rule_type: RuleType) -> tuple[bool, str | None]
     return True, None
 
 
+def _validator_for(rule_type: RuleType) -> Callable[[str], tuple[bool, str | None]]:
+    """One validator per format, all sharing the same (bool, note) signature
+    so the retry loop below can stay generic across every `RuleType`."""
+    if rule_type is RuleType.REGEX:
+        return _validate_regex
+    if rule_type is RuleType.SIGMA:
+        return _validate_sigma_detection_block
+    return lambda content: _validate_line(content, rule_type)
+
+
 def _parse_section(parsed: dict, rule_type: RuleType) -> tuple[str, str]:
     """Pull (content, explanation) for one format out of a combined response."""
     section = parsed.get(RULE_SECTION_KEY[rule_type])
@@ -226,22 +252,30 @@ def _parse_section(parsed: dict, rule_type: RuleType) -> tuple[str, str]:
     return str(section.get(content_key, "")), str(section.get("explanation", ""))
 
 
-def _finalize_regex_rule(
+def _finalize_with_retries(
     finding: ObfuscationFinding,
     provider: LLMProvider,
-    initial_pattern: str,
+    rule_type: RuleType,
+    initial_content: str,
     initial_explanation: str,
+    max_retries: int,
 ) -> GeneratedRule:
-    valid, note = _validate_regex(initial_pattern)
-    if valid:
-        return GeneratedRule(
-            finding_id=finding.id,
-            rule_type=RuleType.REGEX,
-            content=initial_pattern,
-            explanation=initial_explanation,
-            valid=True,
-            validation_note=None,
-        )
+    """Validate one format's content, retrying (feeding the failure reason
+    back to the model) up to `max_retries` times if it doesn't pass. Every
+    retry uses a narrow, single-format prompt -- `build_generation_system_prompt`
+    called with just this one `RuleType` -- not the combined prompt the
+    initial call used, so a retry costs one small, scoped call rather than
+    re-running generation for every requested format again.
+
+    Returns the last attempt's content either way: `valid=True` the moment
+    one passes, or `valid=False` with the final validation_note once retries
+    are exhausted -- never raises, since a still-invalid format after every
+    retry is a legitimate, reportable outcome, not an error in the pipeline
+    itself.
+    """
+    validator = _validator_for(rule_type)
+    content, explanation = initial_content, initial_explanation
+    valid, note = validator(content)
 
     base_user_prompt = rule_generation_user_prompt(
         finding_technique_name=finding.technique_name,
@@ -250,35 +284,46 @@ def _finalize_regex_rule(
         finding_category=finding.category.value,
         attack_mapping=finding.attack_mapping,
     )
-    retry_prompt = (
-        f"{base_user_prompt}\n\nYour previous attempt produced this pattern:\n{initial_pattern}\n\n"
-        f"It failed to compile with Python's re module: {note}\n"
-        "Please fix the pattern and respond again with only the JSON object "
-        "described in the system prompt."
-    )
-    try:
-        retry_parsed = _call_and_parse(provider, REGEX_SYSTEM_PROMPT, retry_prompt, finding.id, "a regex retry")
-    except GenerationError:
-        retry_parsed = None
+    retry_system_prompt = build_generation_system_prompt([rule_type])
 
-    if retry_parsed is not None:
-        retry_pattern = str(retry_parsed.get("pattern", ""))
-        retry_valid, retry_note = _validate_regex(retry_pattern)
-        return GeneratedRule(
-            finding_id=finding.id,
-            rule_type=RuleType.REGEX,
-            content=retry_pattern,
-            explanation=str(retry_parsed.get("explanation", initial_explanation)),
-            valid=retry_valid,
-            validation_note=None if retry_valid else f"Failed to compile after one retry: {retry_note}",
+    attempt = 0
+    while not valid and attempt < max_retries:
+        attempt += 1
+        retry_prompt = (
+            f"{base_user_prompt}\n\nYour previous attempt for this format produced:\n{content}\n\n"
+            f"It failed validation: {note}\n"
+            "Please fix it and respond again with only the JSON object described in the system prompt."
         )
+        try:
+            retry_parsed = _call_and_parse(
+                provider,
+                retry_system_prompt,
+                retry_prompt,
+                finding.id,
+                f"a validation retry ({attempt}/{max_retries}) for {rule_type.value}",
+            )
+        except GenerationError:
+            # Can't recover further -- stop retrying and report the last
+            # known (invalid) attempt rather than raising, since the earlier
+            # combined call already succeeded and this format's own failure
+            # is a legitimate, reportable outcome, not a pipeline error.
+            break
+        content, explanation = _parse_section(retry_parsed, rule_type)
+        valid, note = validator(content)
+
+    if not valid and attempt > 0:
+        # Distinguish "never worked, one shot" from "tried repeatedly and
+        # still couldn't fix it" -- the retry count itself is useful context
+        # for the analyst deciding whether to just fix it by hand.
+        retry_word = "retry" if attempt == 1 else "retries"
+        note = f"{note} (still invalid after {attempt} {retry_word})"
 
     return GeneratedRule(
         finding_id=finding.id,
-        rule_type=RuleType.REGEX,
-        content=initial_pattern,
-        explanation=initial_explanation,
-        valid=False,
+        rule_type=rule_type,
+        content=content,
+        explanation=explanation,
+        valid=valid,
         validation_note=note,
     )
 
@@ -287,9 +332,11 @@ def _generate_for_finding(
     finding: ObfuscationFinding,
     rule_types: list[RuleType],
     provider: LLMProvider,
+    max_validation_retries: int,
 ) -> list[GeneratedRule]:
-    """Run the one combined generation call for `finding` and build every
-    requested format's `GeneratedRule` from its section of the response."""
+    """Run the one combined generation call for `finding`, then validate
+    (and retry, per format, up to `max_validation_retries` times) every
+    requested format's section of the response."""
     system_prompt = build_generation_system_prompt(rule_types)
     user_prompt = rule_generation_user_prompt(
         finding_technique_name=finding.technique_name,
@@ -304,26 +351,7 @@ def _generate_for_finding(
     rules: list[GeneratedRule] = []
     for rule_type in rule_types:
         content, explanation = _parse_section(parsed, rule_type)
-
-        if rule_type is RuleType.REGEX:
-            rules.append(_finalize_regex_rule(finding, provider, content, explanation))
-            continue
-
-        if rule_type is RuleType.SIGMA:
-            valid, note = _validate_sigma_detection_block(content)
-        else:
-            valid, note = _validate_line(content, rule_type)
-
-        rules.append(
-            GeneratedRule(
-                finding_id=finding.id,
-                rule_type=rule_type,
-                content=content,
-                explanation=explanation,
-                valid=valid,
-                validation_note=note,
-            )
-        )
+        rules.append(_finalize_with_retries(finding, provider, rule_type, content, explanation, max_validation_retries))
 
     return rules
 
@@ -334,16 +362,19 @@ def generate_rules(
     provider: LLMProvider,
     *,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
+    max_validation_retries: int = DEFAULT_MAX_VALIDATION_RETRIES,
 ) -> list[GeneratedRule]:
     """Generate and validate detection content for every finding.
 
     Every returned `GeneratedRule` has been through real syntactic validation for
-    its format (see module docstring). A rule that fails validation is still
-    returned — with `valid=False` and a `validation_note` — never silently
-    dropped, so the caller/UI can show the analyst exactly what went wrong.
+    its format (see module docstring), with up to `max_validation_retries`
+    retries per format if the first attempt fails. A rule that's still invalid
+    after exhausting its retries is still returned — with `valid=False` and a
+    `validation_note` — never silently dropped, so the caller/UI can show the
+    analyst exactly what went wrong.
 
     One finding's rules for every requested format come from a single combined
-    provider call (plus, for regex, an optional narrow retry) — not one call per
+    provider call (plus, per format, any validation retries) — not one call per
     (finding, rule_type) pair — and independent findings' calls run concurrently
     (bounded by `max_concurrency`). Output order matches `findings` order
     regardless of which call completes first.
@@ -362,7 +393,8 @@ def generate_rules(
     first_exception: GenerationError | None = None
     try:
         future_to_index = {
-            executor.submit(_generate_for_finding, finding, rule_types, provider): i for i, finding in enumerate(findings)
+            executor.submit(_generate_for_finding, finding, rule_types, provider, max_validation_retries): i
+            for i, finding in enumerate(findings)
         }
         for future in concurrent.futures.as_completed(future_to_index):
             index = future_to_index[future]

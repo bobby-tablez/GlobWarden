@@ -47,7 +47,7 @@ $ globwarden scan demo --provider fake --rules regex,sigma,kql
 ┃                                                                                              ┃
 ┃    one obfuscated pattern in — regex-based detection logic out, in five query languages      ┃
 ┃                                                                                              ┃
-┃    T1027.010 command obfuscation  ·  v0.1.0                                                  ┃
+┃    T1027.010 command obfuscation  ·  v0.3.0                                                  ┃
 ┃                                                                                              ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ feed it a report, get detection content ━┛
     target  demo             
@@ -87,6 +87,7 @@ rule types  regex, sigma, kql
     │    CommandLine|re: (?i)get-(alias|command)\s+[a-z]{1,3}\*[a-z]{0,4}\b                    │
     │  condition: selection                                                                    │
     │                                                                                          │
+    │                                                                                          │
     │  Flags the characteristic tokens of this technique in command-line/script-block          │
     │  telemetry.                                                                              │
     │                                                                                          │
@@ -118,8 +119,8 @@ rule types  regex, sigma, kql
 
     ┌─ ✗ REGEX ────────────────────────────────────────────────────────────────────────────────┐
     │                                                                                          │
-    │  ⚠ VALIDATION FAILED — Failed to compile after one retry: Pattern did not compile with   │
-    │  Python's re module: missing ), unterminated subpattern at position 44                   │
+    │  ⚠ VALIDATION FAILED — Pattern did not compile with Python's re module: missing ),       │
+    │  unterminated subpattern at position 44 (still invalid after 2 retries)                  │
     │                                                                                          │
     │  (?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}(                                           │
     │                                                                                          │
@@ -133,6 +134,7 @@ rule types  regex, sigma, kql
     │    CommandLine|re: (?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}(                         │
     │  condition: selection                                                                    │
     │                                                                                          │
+    │                                                                                          │
     │  Flags the characteristic tokens of this technique in command-line/script-block          │
     │  telemetry.                                                                              │
     │                                                                                          │
@@ -140,6 +142,7 @@ rule types  regex, sigma, kql
     ┌─ ✗ KQL  (Microsoft Sentinel) ────────────────────────────────────────────────────────────┐
     │                                                                                          │
     │  ⚠ VALIDATION FAILED — Generated content has unbalanced parentheses/braces/brackets.     │
+    │  (still invalid after 2 retries)                                                         │
     │                                                                                          │
     │  ProcessCommandLine matches regex @"(?i)-enc(odedcommand)?\s+[A-Za-z0-9+/=]{20,}("       │
     │                                                                                          │
@@ -169,11 +172,14 @@ validation, and rendering are identical; only the findings come from a real mode
 instead of the demo stub, and generation makes one combined LLM call per finding
 (covering every requested format at once) rather than one call per format. And that
 `✗ REGEX` / `✗ KQL` pair above isn't a glitch left in by accident — it's the
-validation step doing its job: content that fails its syntactic check is shown
-anyway, flagged, with the real compiler/parser error attached. Nothing gets
-silently dropped. Notice the REGEX/SIGMA/KQL panels above are just the matching
-expression for each language, not a complete standalone rule — no title, no
-logsource, no rule `id` — that's deliberate: GlobWarden hands you the detection
+validation step doing its job: content that fails its syntactic check gets the
+failure reason fed back to the model for another attempt (capped at a couple of
+retries, so a stubborn format can't run away with your API budget), and if it's
+still invalid after that — as it deliberately is here, to show the path — it's shown
+anyway, flagged, with the real compiler/parser error and retry count attached.
+Nothing gets silently dropped. Notice the REGEX/SIGMA/KQL panels above are just the
+matching expression for each language, not a complete standalone rule — no title,
+no logsource, no rule `id` — that's deliberate: GlobWarden hands you the detection
 logic to drop into your own rule structure, not a finished rule file.
 
 ## Quickstart
@@ -225,14 +231,18 @@ Full per-provider setup (API key details, local server install commands) lives i
 - **Vision-aware** — a screenshot of a report, tweet, or slide works as a source on
   providers/models that support vision; embedded screenshots in a fetched web page
   are pulled out and analyzed too.
-- **Validated output, never silently dropped** — every generated matching
-  expression is checked for syntactic validity (does it compile as regex, parse as
-  YAML, etc.) before it's shown; content that fails is flagged with a reason, not
-  hidden.
+- **Validated output, retried until it's right, never silently dropped** — every
+  generated matching expression is checked for syntactic validity (does it compile
+  as regex, parse as YAML, etc.); a format that fails gets the failure reason fed
+  back to the model and another attempt, capped at a few retries so a stubborn
+  format can't run away with your API budget. Still invalid after that, it's shown
+  flagged with a reason — never hidden, never silently wrong.
 - **Confidence + ATT&CK mapping on every finding** — so you know what to
   double-check first, not just what the model produced.
 - **Terminal output built for demos** — colorized, structured `rich` rendering,
-  not a wall of raw JSON.
+  not a wall of raw JSON — and `--output-file report.txt` saves that exact same
+  layout as a clean, portable text file when a scan's too long for scrollback.
+  `--output markdown`/`json` work with `--output-file` too.
 
 ## How it's different
 

@@ -331,6 +331,146 @@ def test_scan_output_markdown_is_clean_and_pasteable():
 
 
 # ---------------------------------------------------------------------------
+# --output-file
+# ---------------------------------------------------------------------------
+
+
+def test_output_file_terminal_mode_writes_plain_text_no_ansi(tmp_path):
+    out_path = tmp_path / "report.txt"
+    result = runner.invoke(
+        cli_module.app,
+        ["scan", "demo", "--provider", "fake", "--output-file", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.exists()
+
+    content = out_path.read_text()
+    assert "Wildcard Get-Alias" in content
+    assert "REGEX" in content
+    # Same rich panel layout as the live terminal (box-drawing preserved)...
+    assert "╭─" in content and "╰─" in content
+    # ...but as clean plain text -- Rich auto-detects a real file isn't a
+    # live terminal and skips ANSI escape codes entirely.
+    assert "\x1b" not in content
+
+    # A confirmation that a file was written -- somewhere in the captured
+    # output (CliRunner mixes stdout/stderr into .output; the message itself
+    # goes to the stderr-backed console specifically).
+    assert str(out_path) in result.output
+
+    # The actual panel content must not ALSO have gone to stdout -- once
+    # redirected to a file, it isn't duplicated to the terminal.
+    assert "Wildcard Get-Alias" not in result.stdout
+
+    # Confirm the file reads at the fixed, portable width (not whatever
+    # width the test runner's own terminal happens to report).
+    longest_border = max((len(line) for line in content.splitlines() if line.strip().startswith(("╭─", "┏━"))), default=0)
+    assert longest_border <= cli_module.FILE_OUTPUT_WIDTH + 1  # +1: box-drawing corner rounding
+
+    # --output-file's confirmation line uses the resolved value of `output`,
+    # not the file's own extension -- .txt was chosen deliberately here to
+    # confirm the file extension itself has no bearing on which renderer runs.
+
+
+def test_output_file_json_mode_writes_valid_json_not_to_stdout(tmp_path):
+    out_path = tmp_path / "report.json"
+    result = runner.invoke(
+        cli_module.app,
+        ["scan", "demo", "--provider", "fake", "--output", "json", "--output-file", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.exists()
+
+    data = json.loads(out_path.read_text())
+    assert data["tool"] == "globwarden"
+    assert data["summary"]["findings_count"] == 4
+
+    # The JSON must not ALSO be echoed to stdout once it's been redirected
+    # to a file.
+    assert result.stdout.strip() == ""
+    assert str(out_path) in result.output
+
+
+def test_output_file_markdown_mode_writes_markdown_not_to_stdout(tmp_path):
+    out_path = tmp_path / "report.md"
+    result = runner.invoke(
+        cli_module.app,
+        ["scan", "demo", "--provider", "fake", "--output", "markdown", "--output-file", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.exists()
+
+    content = out_path.read_text()
+    assert content.startswith("# GlobWarden scan report")
+    assert "Wildcard Get-Alias" in content
+
+    assert result.stdout.strip() == ""
+    assert str(out_path) in result.output
+
+
+def test_output_file_unwritable_path_errors_cleanly_not_a_crash(tmp_path):
+    # A parent directory that doesn't exist -- open() fails, and that must
+    # surface as a normal CLIError panel + exit code 1, never a raw traceback.
+    bad_path = tmp_path / "does-not-exist" / "report.txt"
+    result = runner.invoke(
+        cli_module.app,
+        ["scan", "demo", "--provider", "fake", "--output-file", str(bad_path)],
+    )
+    assert result.exit_code == 1
+    assert "could not write --output-file" in result.output
+    assert not bad_path.exists()
+
+
+def test_output_file_render_time_exception_leaves_no_partial_file(tmp_path, monkeypatch):
+    # Regression: a real review caught that an exception raised *during*
+    # rendering (not just a failure to open the file) used to leave a
+    # truncated, misleadingly-plausible-looking file sitting at the real
+    # destination path, plus a raw Python traceback -- the exact "last
+    # resort, never dump a raw traceback unasked" scenario every other
+    # failure mode in this command is already hardened against. Force a
+    # mid-render crash and confirm: clean exit 1, a normal error panel (not a
+    # traceback), and no file at all left behind at either the real path or
+    # the atomic-write temp path.
+    out_path = tmp_path / "report.txt"
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated render-time crash")
+
+    monkeypatch.setattr(cli_module.render, "render_summary", _boom)
+
+    result = runner.invoke(
+        cli_module.app,
+        ["scan", "demo", "--provider", "fake", "--output-file", str(out_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "could not write --output-file" in result.output
+    assert "Traceback (most recent call last)" not in result.output
+    assert not out_path.exists()
+    assert not out_path.with_name(out_path.name + ".tmp").exists()
+
+
+def test_output_file_success_leaves_no_leftover_temp_file(tmp_path):
+    out_path = tmp_path / "report.txt"
+    result = runner.invoke(
+        cli_module.app,
+        ["scan", "demo", "--provider", "fake", "--output-file", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.exists()
+    assert not out_path.with_name(out_path.name + ".tmp").exists()
+
+
+def test_no_output_file_behaves_exactly_as_before(tmp_path):
+    # Omitting --output-file entirely must be indistinguishable from before
+    # this feature existed: content goes to stdout, nothing written to disk.
+    result = runner.invoke(cli_module.app, ["scan", "demo", "--provider", "fake"])
+    assert result.exit_code == 0, result.output
+    assert "Wildcard Get-Alias" in result.output
+    assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
 # error paths
 # ---------------------------------------------------------------------------
 
@@ -515,18 +655,22 @@ def test_fake_provider_combined_response_only_covers_requested_types():
     assert set(payload.keys()) == {"regex", "sigma"}
 
 
-def test_fake_provider_regex_retry_response_shape():
-    """The regex-retry call uses the narrow, single-purpose
-    `REGEX_SYSTEM_PROMPT` (not the combined one) and gets back the original,
-    single-format `{"pattern", "explanation"}` shape."""
-    from globwarden.engine.prompts import REGEX_SYSTEM_PROMPT
+def test_fake_provider_single_type_retry_prompt_shape():
+    """A validation retry (see `engine.generate._finalize_with_retries`) uses
+    `build_generation_system_prompt` with a *one-element* rule_types list --
+    not a separate standalone prompt -- so FakeProvider must produce a
+    correctly-shaped combined-style response (one nested section, keyed by
+    that single format) for it too."""
+    from globwarden.engine.prompts import RULE_CONTENT_KEY, build_generation_system_prompt
 
     provider = cli_module.FakeProvider()
-    response = provider.complete(REGEX_SYSTEM_PROMPT, "Category: wildcard_resolution")
+    retry_prompt = build_generation_system_prompt([RuleType.REGEX])
+    response = provider.complete(retry_prompt, "Category: wildcard_resolution")
     payload = json.loads(response.text)
 
-    assert "pattern" in payload
-    assert "explanation" in payload
+    assert set(payload.keys()) == {"regex"}
+    assert RULE_CONTENT_KEY[RuleType.REGEX] in payload["regex"]
+    assert "explanation" in payload["regex"]
 
 
 # ---------------------------------------------------------------------------

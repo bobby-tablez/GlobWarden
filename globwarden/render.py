@@ -120,7 +120,7 @@ def _rule_type_display(rule_type) -> str:
 # --------------------------------------------------------------------------
 
 
-def banner(console: Console, *, version: str = "0.2.4") -> None:
+def banner(console: Console, *, version: str = "0.3.0") -> None:
     """Print the startup banner. Deliberately not full figlet ASCII art —
     a tight, well-kerned wordmark in a heavy-bordered panel reads sharper
     on a projector than a hand-drawn font, and it can't come out lopsided
